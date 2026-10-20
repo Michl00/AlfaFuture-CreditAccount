@@ -34,6 +34,6 @@ def load_config(path: str | None = None) -> Config:
         LogConfig(
             level = "DEBUG",
             format = "[%(asctime)s] #%(levelname)8s %(name)s -%(filename)s:%(lineno)d %(message)s",
-            file = 'bot.log',
+            file = 'app.log',
         ),
     )
