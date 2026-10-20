@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass
 class DBConfig:
     table: str
+    path: str
 
 @dataclass
 class LogConfig:
@@ -28,6 +29,7 @@ def load_config(path: str | None = None) -> Config:
     return Config(
         DBConfig(
             table = Path("config/schema.sql").read_text(encoding="utf-8"),
+            path="app.db",
         ),
         LogConfig(
             level = "DEBUG",
