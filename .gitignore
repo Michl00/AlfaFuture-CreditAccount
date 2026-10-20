@@ -2,4 +2,7 @@ venv/
 .venv/
 .env
 __pycache__/
-bot.log
+app.log
+app.db
+app.db-wal
+app.db-shm

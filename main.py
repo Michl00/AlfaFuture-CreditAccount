@@ -4,6 +4,8 @@ import logging
 import aiosqlite
 
 from config.config import Config, load_config
+from services.db import UserExistsError
+from services.services import ValidationError, register_user
 
 config: Config = load_config()
 
@@ -25,6 +27,16 @@ async def main():
         await conn.execute(config.db.table)
         await conn.commit()
         logger.info('db connected succesfully')
+
+        try:
+            user_id = await register_user(
+                conn, "alice", "alice@example.com", "strongpass123", "7707083893"
+            )
+            logger.info("user created: id=%s", user_id)
+        except ValidationError as e:
+            logger.warning("validation failed: %s", e)
+        except UserExistsError as e:
+            logger.warning("registration failed: %s", e)
 
 if __name__=='__main__':
     asyncio.run(main())

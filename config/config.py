@@ -27,11 +27,11 @@ def load_config(path: str | None = None) -> Config:
     # env.read_env(path)
 
     return Config(
-        DBConfig(
+        db=DBConfig(
             table = Path("config/schema.sql").read_text(encoding="utf-8"),
             path="app.db",
         ),
-        LogConfig(
+        log=LogConfig(
             level = "DEBUG",
             format = "[%(asctime)s] #%(levelname)8s %(name)s -%(filename)s:%(lineno)d %(message)s",
             file = 'app.log',
