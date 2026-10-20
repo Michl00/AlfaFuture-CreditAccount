@@ -28,6 +28,7 @@ async def main():
         await conn.commit()
         logger.info('db connected succesfully')
 
+        # Тестовая регистрация пользователя
         try:
             user_id = await register_user(
                 conn, "alice", "alice@example.com", "strongpass123", "7707083893"
