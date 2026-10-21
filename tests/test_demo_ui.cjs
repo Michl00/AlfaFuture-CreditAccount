@@ -11,6 +11,24 @@ const domain = fs.readFileSync(path.join(root, 'static/demo/credit.js'), 'utf8')
 const sample = {product: 'working', amount: 1500000, months: 24, company: 'ООО «Вектор»', inn: '7701234560', revenue: 1200000, expenses: 700000, debt: 20000, age: 24};
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+function mockCredit(url, options) {
+  const data = JSON.parse(options.body || '{}');
+  if (url === '/credit/recommendations') return new Response(JSON.stringify({recommendation_token: 'signed-recommendation-fixture', offers: credit.products.map((product, index) => {
+    const amount = Math.min(data.requestedAmount, product.max);
+    const months = Math.min(data.requestedMonths, product.months);
+    return {id: product.id, product: product.id, name: product.name, reason: 'Вариант под цель', amount, months, rate: product.rate, payment: credit.payment(amount, months, product.rate), recommended: index === 0, high_chance: index === 1};
+  })}));
+  if (url === '/credit/assessments') {
+    if (data.age < 6 && data.clarification.length < 20) return new Response(JSON.stringify({status: 'needs_info', risk: 'medium', reasons: ['Уточните доходы бизнеса'], assessment_token: null}));
+    const adjusted = data.expenses >= 1000000;
+    const terms = {amount: adjusted ? Math.min(data.amount, 1200000) : data.amount, months: adjusted ? 36 : 24, rate: adjusted ? 27.9 : 24.9};
+    terms.payment = credit.payment(terms.amount, terms.months, terms.rate);
+    return new Response(JSON.stringify({status: 'ready', risk: adjusted ? 'high' : 'low', reasons: [adjusted ? 'Сумма уменьшена для посильного платежа' : 'Корректировки не нужны'], terms, assessment_token: 'signed-assessment-fixture'}));
+  }
+  if (url === '/credit/confirm') return new Response(JSON.stringify({id: 'server-confirmation-fixture', status: 'bank_review', createdAt: Date.now(), product: 'working', goal: 'Пополнение оборотных средств'}));
+  return undefined;
+}
+
 async function setup(t, options = {}) {
   const dom = new JSDOM(html, {url: options.url || 'http://localhost/demo', runScripts: 'outside-only'});
   t.after(() => dom.window.close());
@@ -35,7 +53,12 @@ async function setup(t, options = {}) {
   if (options.storage) for (const [key, value] of Object.entries(options.storage)) window.localStorage.setItem(key, value);
   window.fetch = async (...args) => {
     calls.push(args);
-    return options.fetch ? options.fetch(...args) : options.guest ? new Response('{}', {status: 401}) : new Response(JSON.stringify({id: 1, username: 'Тест', email: 'test@example.com', is_verified: true}));
+    if (String(args[0]).startsWith('/credit/')) {
+      const override = options.creditFetch ? await options.creditFetch(...args) : undefined;
+      if (override) return override;
+      return mockCredit(...args);
+    }
+    return options.fetch ? options.fetch(...args) : options.guest ? new Response('{}', {status: 401}) : new Response(JSON.stringify({id: 1, username: 'Тест', email: 'test@example.com'}));
   };
   window.eval(domain);
   window.eval(script);
@@ -82,28 +105,15 @@ test('payment, INN validation, and request constraints handle expected cases', (
   assert.match(credit.validateRequest({goal: 'working', requestedAmount: 99999, requestedMonths: 24}), /сумму/);
 });
 
-test('recommendations rank the goal first and respect each product limits', () => {
-  const offers = credit.advisor.recommend({goal: 'equipment', requestedAmount: 10000000, requestedMonths: 60});
-  assert.equal(offers[0].product, 'equipment');
-  assert.equal(offers[0].recommended, true);
-  const flex = offers.find(offer => offer.product === 'flex');
-  assert.equal(flex.amount, 3000000);
-  assert.equal(flex.months, 24);
-  assert.equal(flex.limited, true);
-});
-
-test('risk assessment adjusts terms, requests information, or finds no affordable terms', () => {
-  const ready = credit.advisor.assess(sample);
-  assert.equal(ready.status, 'ready');
-  assert.equal(ready.terms.amount, sample.amount);
-  const adjusted = credit.advisor.assess({...sample, expenses: 1000000, debt: 50000});
-  assert.equal(adjusted.status, 'ready');
-  assert.ok(adjusted.terms.amount < sample.amount);
-  assert.ok(adjusted.terms.months > sample.months);
-  assert.ok(adjusted.terms.rate > 24.9);
-  assert.ok(adjusted.terms.payment <= 50000);
-  assert.equal(credit.advisor.assess({...sample, expenses: 1200000}).status, 'unavailable');
-  assert.equal(credit.advisor.assess({...sample, age: 2}).status, 'needs_info');
+test('income indicator is continuous across category boundaries', () => {
+  const before = credit.approvalEstimate({...sample, rate: 24.9, amount: 1000000});
+  const after = credit.approvalEstimate({...sample, rate: 24.9, amount: 1000100});
+  assert.ok(Math.abs(before.score - after.score) < 0.1);
+  const available = (sample.revenue - sample.expenses) * .5 - sample.debt;
+  const boundary = available / (1.25 * credit.payment(1, 24, 24.9));
+  const left = credit.approvalEstimate({...sample, amount: boundary - 100});
+  const right = credit.approvalEstimate({...sample, amount: boundary + 100});
+  assert.ok(Math.abs(left.score - right.score) < 0.1);
 });
 
 test('dashboard hides developer internals and calculator opens the needs stage', async t => {
@@ -170,13 +180,20 @@ test('clarification must be reassessed and separately consented before sending',
   assert.equal(ui.state().draft.assessment.status, 'ready');
 });
 
-test('unaffordable conditions never produce a bank application', async t => {
+test('extremely low chances block advancement and provide an edit button', async t => {
   const ui = await setup(t);
-  await prepareTerms(ui, {expenses: 1200000});
-  assert.equal(ui.state().draft.assessment.status, 'unavailable');
-  assert.equal(ui.window.document.querySelector('[name="consent"]'), null);
+  ui.click('[data-action="apply"]');
+  ui.set('app-goal', 'Закупка товаров');
   await ui.submit('application-form');
-  assert.ok(ui.get('app-requestedAmount'));
+  ui.click('[data-offer="working"]');
+  await ui.submit('application-form');
+  ui.click('[data-action="sample"]');
+  ui.set('app-expenses', 1200000);
+  assert.equal(ui.get('wizard-next').disabled, true);
+  assert.match(ui.get('approval-indicator').textContent, /Слишком низкие шансы/);
+  assert.ok(ui.get('approval-indicator').querySelector('[data-action="adjust-amount"]'));
+  await ui.submit('application-form');
+  assert.equal(ui.calls.filter(([path]) => path === '/credit/assessments').length, 0);
   assert.equal(ui.state().applications.length, 0);
 });
 
@@ -206,7 +223,7 @@ test('changing company data after assessment requires a fresh evaluation', async
   ui.set('app-expenses', 1200000);
   await ui.submit('application-form');
   await ui.finishAssessment();
-  assert.equal(ui.state().draft.assessment.status, 'unavailable');
+  assert.equal(ui.get('wizard-next').disabled, true);
   assert.equal(ui.state().applications.length, 0);
 });
 
@@ -236,7 +253,7 @@ test('login uses form encoding, restores user workspace and never stores credent
   let loggedIn = false;
   const ui = await setup(t, {fetch: async (url, options) => {
     if (url === '/auth/login') {loggedIn = true; return new Response(null, {status: 204});}
-    return loggedIn ? new Response(JSON.stringify({id: 3, username: 'Мария', email: 'demo@example.com', is_verified: false})) : new Response('{}', {status: 401});
+    return loggedIn ? new Response(JSON.stringify({id: 3, username: 'Мария', email: 'demo@example.com'})) : new Response('{}', {status: 401});
   }});
   ui.click('[data-action="account"]');
   ui.set('account-email', 'demo+test@example.com');
@@ -318,7 +335,7 @@ test('successful registration logs in and resumes the application with no guest 
   const ui = await setup(t, {fetch: async url => {
     if (url === '/auth/register') return new Response('{}', {status: 201});
     if (url === '/auth/login') {loggedIn = true; return new Response(null, {status: 204});}
-    return loggedIn ? new Response(JSON.stringify({id: 8, username: 'Новый', email: 'new@example.com', is_verified: false})) : new Response('{}', {status: 401});
+    return loggedIn ? new Response(JSON.stringify({id: 8, username: 'Новый', email: 'new@example.com'})) : new Response('{}', {status: 401});
   }});
   ui.click('[data-action="apply"]');
   ui.click('#application-dialog [data-action="register"]');
@@ -333,7 +350,7 @@ test('successful registration logs in and resumes the application with no guest 
 
 test('expired server session prevents final submission and asks for an account', async t => {
   let expired = false;
-  const ui = await setup(t, {fetch: async () => expired ? new Response('{}', {status: 401}) : new Response(JSON.stringify({id: 1, username: 'Тест', email: 'test@example.com'}))});
+  const ui = await setup(t, {creditFetch: async path => path === '/credit/confirm' && expired ? new Response('{}', {status: 401}) : undefined, fetch: async () => expired ? new Response('{}', {status: 401}) : new Response(JSON.stringify({id: 1, username: 'Тест', email: 'test@example.com'}))});
   await prepareTerms(ui);
   ui.window.document.querySelector('[name="consent"]').checked = true;
   expired = true;
@@ -383,6 +400,35 @@ test('low approval estimate offers a slider, recalculates live and applies only 
 
 test('approval estimate remains qualitative and handles incomplete or unaffordable income', () => {
   assert.equal(credit.approvalEstimate({...sample, revenue: ''}).level, 'unknown');
-  assert.equal(credit.approvalEstimate({...sample, expenses: 1200000}).level, 'low');
+  assert.equal(credit.approvalEstimate({...sample, expenses: 1200000}).level, 'critical');
   assert.equal(credit.approvalEstimate(sample).level, 'high');
+});
+
+
+test('provider failure never falls back to local generated offers', async t => {
+  const ui = await setup(t, {creditFetch: async () => new Response(JSON.stringify({detail: 'CREDIT_AI_NOT_CONFIGURED'}), {status: 503})});
+  ui.click('[data-action="apply"]');
+  ui.set('app-goal', 'Новая мастерская');
+  await ui.submit('application-form');
+  assert.equal(ui.get('wizard-fields').querySelectorAll('[data-offer]').length, 0);
+  assert.match(ui.get('application-error').textContent, /не настроен/);
+  assert.equal(ui.state().applications.length, 0);
+});
+
+test('conservative AI offers display the high-chance badge', async t => {
+  const ui = await setup(t);
+  ui.click('[data-action="apply"]');
+  ui.set('app-goal', 'Новая мастерская');
+  await ui.submit('application-form');
+  assert.match(ui.get('wizard-fields').querySelector('.high-chance').textContent, /Высокий шанс одобрения/);
+});
+
+test('model risk rejection prevents consent even when local income indicator is high', async t => {
+  const ui = await setup(t, {creditFetch: async path => path === '/credit/assessments' ? new Response(JSON.stringify({status: 'blocked', risk: 'critical', reasons: ['Слишком низкие шансы'], terms: null, assessment_token: null})) : undefined});
+  await prepareTerms(ui);
+  assert.match(ui.get('wizard-fields').textContent, /Слишком низкие шансы/);
+  assert.equal(ui.get('wizard-fields').querySelector('[name="consent"]'), null);
+  await ui.submit('application-form');
+  assert.ok(ui.get('app-company'));
+  assert.equal(ui.state().applications.length, 0);
 });

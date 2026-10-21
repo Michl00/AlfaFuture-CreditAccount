@@ -21,7 +21,7 @@ class TokenURLTests(unittest.TestCase):
                          {'lang': ['ru'], 'empty': [''], 'token': [token]})
 
     def test_replaces_existing_tokens(self):
-        url = build_token_url('https://example.com/verify?token=old&token=older', 'new')
+        url = build_token_url('https://example.com/reset?token=old&token=older', 'new')
         self.assertEqual(parse_qs(urlsplit(url).query), {'token': ['new']})
 
     def test_rejects_missing_relative_and_non_http_urls(self):
@@ -58,7 +58,7 @@ class SendEmailTests(unittest.IsolatedAsyncioTestCase):
     async def test_supports_local_server_without_tls_or_auth(self):
         self.config.starttls = False
         self.config.username = self.config.password = ''
-        await send_email(self.config, 'user@example.com', 'Verify', 'Link')
+        await send_email(self.config, 'user@example.com', 'Reset password', 'Link')
         self.smtp.starttls.assert_not_called()
         self.smtp.login.assert_not_called()
         self.smtp.send_message.assert_called_once()
@@ -68,27 +68,27 @@ class SendEmailTests(unittest.IsolatedAsyncioTestCase):
             original = getattr(self.config, field)
             setattr(self.config, field, '')
             with self.subTest(field=field), self.assertRaises(ValueError):
-                await send_email(self.config, 'user@example.com', 'Verify', 'Link')
+                await send_email(self.config, 'user@example.com', 'Reset password', 'Link')
             setattr(self.config, field, original)
         self.smtp_factory.assert_not_called()
 
     async def test_propagates_delivery_failure_and_closes_connection(self):
         self.smtp.send_message.side_effect = smtplib.SMTPException('Delivery failed')
         with self.assertRaises(smtplib.SMTPException):
-            await send_email(self.config, 'user@example.com', 'Verify', 'Link')
+            await send_email(self.config, 'user@example.com', 'Reset password', 'Link')
         self.smtp_factory.return_value.__exit__.assert_called_once()
 
     async def test_does_not_send_if_tls_fails(self):
         self.smtp.starttls.side_effect = smtplib.SMTPNotSupportedError('No STARTTLS')
         with self.assertRaises(smtplib.SMTPNotSupportedError):
-            await send_email(self.config, 'user@example.com', 'Verify', 'Link')
+            await send_email(self.config, 'user@example.com', 'Reset password', 'Link')
         self.smtp.login.assert_not_called()
         self.smtp.send_message.assert_not_called()
 
     async def test_does_not_send_if_authentication_fails(self):
         self.smtp.login.side_effect = smtplib.SMTPAuthenticationError(535, b'Failed')
         with self.assertRaises(smtplib.SMTPAuthenticationError):
-            await send_email(self.config, 'user@example.com', 'Verify', 'Link')
+            await send_email(self.config, 'user@example.com', 'Reset password', 'Link')
         self.smtp.send_message.assert_not_called()
 
     async def test_smtp_runs_outside_event_loop_thread(self):
@@ -96,7 +96,7 @@ class SendEmailTests(unittest.IsolatedAsyncioTestCase):
         smtp_threads = []
         self.smtp.send_message.side_effect = lambda message: smtp_threads.append(
             threading.get_ident())
-        await send_email(self.config, 'user@example.com', 'Verify', 'Link')
+        await send_email(self.config, 'user@example.com', 'Reset password', 'Link')
         self.assertEqual(len(smtp_threads), 1)
         self.assertNotEqual(smtp_threads[0], main_thread)
 

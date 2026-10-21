@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
     reset_password_token_secret = config.auth.secret
-    verification_token_secret = config.auth.secret
 
     async def validate_password(self, password: str, user) -> None:
         if not 8 <= len(password) <= 128:
@@ -39,16 +38,6 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             "Если вы не запрашивали сброс пароля, проигнорируйте это письмо.",
         )
         logger.info("password reset requested: id=%s", user.id)
-
-    async def on_after_request_verify(self, user: User, token: str,
-                                      request: Request | None = None):
-        link = build_token_url(config.mail.verification_url, token)
-        await send_email(
-            config.mail, user.email, "Подтверждение электронной почты",
-            f"Для подтверждения электронной почты перейдите по ссылке:\n{link}\n\n"
-            "Если вы не регистрировались, проигнорируйте это письмо.",
-        )
-        logger.info("verification requested: id=%s", user.id)
 
 
 async def get_user_manager(

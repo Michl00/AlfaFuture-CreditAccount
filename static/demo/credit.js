@@ -1,4 +1,4 @@
-/* Demonstration rules only; no bank integrations or real credit decisions. */
+/* Local, continuous affordability indicator; AI advice is requested from the server. */
 (function (root) {
   'use strict';
   const products = [
@@ -31,67 +31,28 @@
     return null;
   }
   const goalSuggestions = ['Закупка товаров', 'Покупка оборудования', 'Открытие новой точки', 'Ремонт помещения', 'Пополнение оборотных средств', 'Покрытие кассового разрыва'];
-  function goalCategory(goal) {
-    const value = String(goal).toLowerCase();
-    if (/кассов|разрыв|сезон|краткоср|коротк|flex/.test(value)) return 'flex';
-    if (/оборуд|развит|точк|ремонт|строит|помещ|автомоб|станок|производ|расшир|equipment/.test(value)) return 'equipment';
-    return 'working';
-  }
   function approvalEstimate(data) {
     const product = products.find(p => p.id === data.product);
     if (!product || ['revenue', 'expenses', 'debt'].some(key => data[key] === '' || data[key] === undefined || !Number.isFinite(Number(data[key])) || Number(data[key]) < 0) || Number(data.revenue) <= 0 || Number(data.amount) <= 0 || Number(data.months) <= 0) {
       return {level: 'unknown', label: 'Добавьте доходы и расходы', score: 0};
     }
     const available = (Number(data.revenue) - Number(data.expenses)) * 0.5 - Number(data.debt);
-    const monthly = payment(Number(data.amount), Number(data.months), product.rate);
+    const monthly = payment(Number(data.amount), Number(data.months), Number(data.rate ?? product.rate));
     const ratio = available / monthly;
-    const level = ratio < 1 ? 'low' : ratio < 1.25 || data.age !== '' && Number(data.age) < 6 ? 'medium' : 'high';
-    const label = {low: 'Низкая', medium: 'Средняя', high: 'Высокая'}[level];
-    return {level, label, score: level === 'high' ? 90 : level === 'medium' ? 60 : Math.max(8, Math.min(35, ratio * 35)), monthly};
+    const level = ratio < 0.3 ? 'critical' : ratio < 1 ? 'low' : ratio < 1.25 || data.age !== '' && Number(data.age) < 6 ? 'medium' : 'high';
+    const label = {critical: 'Крайне низкая', low: 'Низкая', medium: 'Средняя', high: 'Высокая'}[level];
+    // A continuous curve avoids the old 35 → 60 → 90 jumps at category boundaries.
+    const score = 100 * Math.max(0, ratio) / (Math.max(0, ratio) + 0.65);
+    return {level, label, score, monthly};
   }
+
   function validateRequest(data) {
     if (typeof data.goal !== 'string' || data.goal.trim().length < 3 || data.goal.trim().length > 500) return 'Опишите цель кредита: от 3 до 500 символов.';
     if (!Number.isFinite(Number(data.requestedAmount)) || Number(data.requestedAmount) < 100000 || Number(data.requestedAmount) > 10000000) return 'Укажите сумму от 100 000 до 10 000 000 ₽.';
     if (!Number.isInteger(Number(data.requestedMonths)) || Number(data.requestedMonths) < 6 || Number(data.requestedMonths) > 60) return 'Укажите срок от 6 до 60 месяцев.';
     return null;
   }
-  function recommend(data) {
-    if (validateRequest(data)) throw new Error('Invalid financing request');
-    const category = goalCategory(data.goal);
-    return [...products].sort((a, b) => Number(b.id === category) - Number(a.id === category)).map((product, index) => {
-      const amount = Math.min(Number(data.requestedAmount), product.max);
-      const months = Math.min(Number(data.requestedMonths), product.months);
-      return {product: product.id, amount, months, rate: product.rate, payment: payment(amount, months, product.rate), recommended: index === 0,
-        reason: product.id === category ? 'Соответствует вашей цели финансирования.' : product.description,
-        limited: amount !== Number(data.requestedAmount) || months !== Number(data.requestedMonths)};
-    });
-  }
-  function assess(data) {
-    if (validate(data)) throw new Error('Invalid demonstration application');
-    if (Number(data.age) < 6 && (!data.clarification || data.clarification.trim().length < 20)) {
-      return {status: 'needs_info', reasons: ['Бизнес работает меньше полугода. Расскажите о заключённых договорах и источниках выручки.']};
-    }
-    const product = products.find(item => item.id === data.product);
-    const available = (Number(data.revenue) - Number(data.expenses)) * 0.5 - Number(data.debt);
-    const initialPayment = payment(Number(data.amount), Number(data.months), product.rate);
-    const risk = available < initialPayment ? 'high' : Number(data.age) < 12 || initialPayment > available * 0.7 ? 'medium' : 'low';
-    const rate = Math.round((product.rate + (risk === 'high' ? 3 : risk === 'medium' ? 1.5 : 0)) * 10) / 10;
-    let months = Number(data.months);
-    // First consider a longer term, then a smaller principal if necessary.
-    if (payment(Number(data.amount), months, rate) > available) months = Math.min(product.months, months + 12);
-    const affordable = Math.floor(available / payment(1, months, rate) / 10000) * 10000;
-    const amount = Math.min(Number(data.amount), affordable);
-    if (amount < 100000 || available <= 0) return {status: 'unavailable', risk: 'high', reasons: ['Свободного дохода сейчас недостаточно для платежа. Попробуйте изменить сумму или финансовые данные.']};
-    const reasons = [];
-    if (months !== Number(data.months)) reasons.push('Срок увеличен, чтобы снизить ежемесячный платёж.');
-    if (amount !== Number(data.amount)) reasons.push('Сумма уменьшена, чтобы платёж соответствовал возможностям бизнеса.');
-    if (rate !== product.rate) reasons.push('В демонстрационной оценке ставка скорректирована с учётом срока работы бизнеса и нагрузки на доход.');
-    if (!reasons.length) reasons.push('Указанных доходов достаточно для выбранных условий. Корректировки не понадобились.');
-    return {status: 'ready', risk, reasons, terms: {amount, months, rate, payment: payment(amount, months, rate)}};
-  }
-  // Replace this boundary with server-backed recommendations/assessment when CometAPI is connected.
-  const advisor = {recommend, assess};
-  const api = {products, payment, validInn, validate, validateRequest, advisor, goalSuggestions, approvalEstimate};
+  const api = {products, payment, validInn, validate, validateRequest, goalSuggestions, approvalEstimate};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CreditFlow = api;
 })(typeof window === 'undefined' ? globalThis : window);

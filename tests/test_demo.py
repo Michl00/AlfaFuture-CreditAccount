@@ -97,19 +97,17 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(response.status_code, 204)
 
-    async def test_verify_from_email_link(self):
+    async def test_email_confirmation_is_not_exposed(self):
+        schema = (await self.client.get('/openapi.json')).json()
+        self.assertNotIn('/auth/verify', schema['paths'])
+        self.assertNotIn('/auth/request-verify-token', schema['paths'])
         await self.register()
-        with patch.object(config.mail, 'verification_url', 'http://testserver/demo?flow=verify'), \
-                patch('services.users.send_email', new_callable=AsyncMock) as send:
-            response = await self.client.post('/auth/request-verify-token', json={'email': 'demo@example.com'})
-        self.assertEqual(response.status_code, 202)
-        send.assert_awaited_once()
-        link = send.call_args.args[3].splitlines()[1]
-        query = parse_qs(urlsplit(link).query)
-        self.assertEqual(query['flow'], ['verify'])
-        response = await self.client.post('/auth/verify', json={'token': query['token'][0]})
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertTrue(response.json()['is_verified'])
+        await self.client.post('/auth/login', data={'username': 'demo@example.com', 'password': 'test-password-123'})
+        profile = await self.client.get('/users/me')
+        self.assertEqual(profile.status_code, 200)
+        self.assertNotIn('is_verified', profile.json())
+        for name in ('UserRead', 'UserCreate', 'UserUpdate'):
+            self.assertNotIn('is_verified', schema['components']['schemas'][name]['properties'])
 
     async def test_validation_error_is_json(self):
         response = await self.client.post('/auth/register', json={

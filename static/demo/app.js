@@ -1,6 +1,6 @@
 'use strict';
 
-const {products, payment, validate, validateRequest, advisor, goalSuggestions, approvalEstimate} = window.CreditFlow;
+const {products, payment, validate, validateRequest, goalSuggestions, approvalEstimate} = window.CreditFlow;
 const $ = id => document.getElementById(id);
 const money = amount => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(amount) + ' ₽';
 const moneyFields = new Set(['requestedAmount', 'amount', 'revenue', 'expenses', 'debt']);
@@ -33,7 +33,7 @@ let draft = null;
 let applications = [];
 let wizardStep = 0;
 let assessmentBusy = false;
-let assessmentTimer;
+let adviceVersion = 0;
 let accountMode = 'login';
 let accountBusy = false;
 let detailId = null;
@@ -65,8 +65,8 @@ function persist() {
   $('draft-status').textContent = storageAvailable ? 'Черновик сохранён на этом устройстве' : 'Изменения доступны до закрытия вкладки';
 }
 function loadWorkspace() {
+  adviceVersion += 1;
   clearTimeout(saveTimer);
-  clearTimeout(assessmentTimer);
   assessmentBusy = false;
   draft = null;
   applications = [];
@@ -80,7 +80,8 @@ function loadWorkspace() {
       draft.requestedAmount = saved.draft.requestedAmount ?? saved.draft.amount ?? 1500000;
       draft.requestedMonths = saved.draft.requestedMonths ?? saved.draft.months ?? 24;
       draft.stage = Number.isInteger(draft.stage) && draft.stage >= 0 && draft.stage <= 3 ? draft.stage : 0;
-      if (draft.stage >= 2 && !draft.selectedOffer) draft.stage = 1;
+      if (!draft.recommendation_token || !Array.isArray(draft.offers) || !draft.offers.length) draft.stage = 0;
+      else if (draft.stage >= 2 && !draft.selectedOffer) draft.stage = 1;
       if (draft.stage === 3 && validate(draft)) draft.stage = 2;
     }
     if (Array.isArray(saved.applications)) applications = saved.applications.filter(item => item && typeof item.id === 'string' && !validate(item) && Object.hasOwn(statusNames, item.status) && item.status !== 'draft' && Number.isFinite(item.createdAt)).slice(0, 100);
@@ -145,11 +146,13 @@ function beginApplication(productId, fromCalculator = false) {
   if (!user) {pendingApplication = {productId, fromCalculator}; showRegistrationStep(); return;}
   if (!draft) draft = emptyDraft();
   if (productId || fromCalculator) {
-    clearTimeout(assessmentTimer);
+    adviceVersion += 1;
     assessmentBusy = false;
     draft.stage = 0;
     draft.selectedOffer = null;
     draft.assessment = null;
+    draft.offers = [];
+    draft.recommendation_token = null;
   }
   if (productId) draft.goal = products.find(product => product.id === productId).name;
   if (fromCalculator) {
@@ -175,16 +178,54 @@ function reviewData(item, amount = Number(item.amount)) {
 }
 function comparison(assessment) {
   const product = products.find(p => p.id === draft.product);
-  const before = [money(Number(draft.amount)), `${draft.months} мес.`, `${String(product.rate).replace('.', ',')}%`, money(payment(Number(draft.amount), Number(draft.months), product.rate))];
+  const before = [money(Number(draft.amount)), `${draft.months} мес.`, `${String(draft.rate ?? product.rate).replace('.', ',')}%`, money(payment(Number(draft.amount), Number(draft.months), draft.rate ?? product.rate))];
   const after = [money(assessment.terms.amount), `${assessment.terms.months} мес.`, `${String(assessment.terms.rate).replace('.', ',')}%`, money(assessment.terms.payment)];
   return `<div class="terms-comparison"><div class="comparison-row comparison-head"><span>Параметр</span><span>Вы выбрали</span><span>К согласованию</span></div>${['Сумма', 'Срок', 'Ставка', 'Платёж в месяц'].map((label, index) => `<div class="comparison-row"><span>${label}</span><span>${before[index]}</span><strong class="${before[index] !== after[index] ? 'changed' : ''}">${after[index]}</strong></div>`).join('')}</div>`;
 }
 function offerCards() {
-  return advisor.recommend(draft).map(offer => {
-    const product = products.find(p => p.id === offer.product);
-    const selected = draft.selectedOffer === offer.product;
-    return `<article class="offer-card ${selected ? 'selected' : ''}"><div class="section-heading"><h3>${product.name}</h3>${offer.recommended ? '<span class="offer-tag">Под вашу цель</span>' : ''}</div><p class="muted">${offer.reason}</p><div class="offer-facts"><strong>${money(offer.amount)}<small>на ${offer.months} мес.</small></strong><strong>${money(offer.payment)}<small>в месяц · ${String(offer.rate).replace('.', ',')}%</small></strong></div>${offer.limited ? '<p class="field-hint">Сумма или срок ограничены условиями этого варианта.</p>' : ''}<button type="button" class="button ${selected ? 'primary' : 'secondary'} full" data-offer="${offer.product}" aria-pressed="${selected}">${selected ? 'Выбрано ✓' : 'Выбрать вариант →'}</button></article>`;
+  return (draft.offers || []).map(offer => {
+    const selected = draft.selectedOffer === offer.id;
+    return `<article class="offer-card ${selected ? 'selected' : ''}"><div class="section-heading"><h3>${escapeHTML(offer.name)}</h3>${offer.high_chance ? '<span class="offer-tag high-chance">✓ Высокий шанс одобрения</span>' : offer.recommended ? '<span class="offer-tag">Под вашу цель</span>' : ''}</div><p class="muted">${escapeHTML(offer.reason)}</p><div class="offer-facts"><strong>${money(offer.amount)}<small>на ${offer.months} мес.</small></strong><strong>${money(offer.payment)}<small>в месяц · ${String(offer.rate).replace('.', ',')}%</small></strong></div>${offer.high_chance ? '<p class="field-hint">Более консервативные условия. Оценка предварительная, до анализа компании.</p>' : ''}<button type="button" class="button ${selected ? 'primary' : 'secondary'} full" data-offer="${escapeHTML(offer.id)}" aria-pressed="${selected}">${selected ? 'Выбрано ✓' : 'Выбрать вариант →'}</button></article>`;
   }).join('');
+}
+function creditError(result) {
+  const messages = {
+    CREDIT_AI_NOT_CONFIGURED: 'Сервис ИИ ещё не настроен. Обратитесь к администратору.',
+    CREDIT_AI_UNAVAILABLE: 'Не удалось получить ответ ИИ. Попробуйте ещё раз.',
+    CREDIT_AI_INVALID_TERMS: 'Полученные условия не прошли проверку. Повторите подбор.',
+    CREDIT_ADVICE_EXPIRED: 'Оценка устарела. Повторите подбор и оценку условий.',
+    CREDIT_CONDITIONS_CHANGED: 'Данные изменились. Нужна повторная оценка.',
+    CREDIT_CHANCE_TOO_LOW: 'Слишком низкие шансы на согласование. Измените условия.',
+  };
+  return messages[result.data?.detail] || 'Не удалось завершить оценку. Проверьте данные и попробуйте ещё раз.';
+}
+function assessmentPayload() {
+  return {recommendation_token: draft.recommendation_token, offer_id: draft.selectedOffer,
+    amount: Number(draft.amount), company: draft.company, inn: draft.inn,
+    revenue: Number(draft.revenue), expenses: Number(draft.expenses), debt: Number(draft.debt),
+    age: Number(draft.age), clarification: draft.clarification || ''};
+}
+async function requestOffers() {
+  assessmentBusy = true;
+  wizardStep = 1;
+  draft.stage = 1;
+  draft.offers = [];
+  draft.assessment = null;
+  const snapshot = draft;
+  const version = ++adviceVersion;
+  renderWizard();
+  let message;
+  try {
+    const result = await api('/credit/recommendations', 'POST', {goal: draft.goal,
+      requestedAmount: Number(draft.requestedAmount), requestedMonths: Number(draft.requestedMonths)});
+    if (draft !== snapshot || version !== adviceVersion) return;
+    if (result.status === 401 || result.status === 403) {persist(); user = null; loadWorkspace(); pendingApplication = {}; showRegistrationStep(); return;}
+    if (!result.ok) {message = creditError(result); if (result.data?.detail === 'CREDIT_ADVICE_EXPIRED') {wizardStep = 0; draft.stage = 0;}}
+    else Object.assign(draft, result.data);
+  } catch { message = 'Не удалось связаться с сервисом подбора. Попробуйте ещё раз.'; }
+  finally {
+    if (draft === snapshot && version === adviceVersion) {assessmentBusy = false; persist(); renderWizard(); if (message) wizardError(message);}
+  }
 }
 function renderWizard() {
   if (!user) {showRegistrationStep(); return;}
@@ -197,23 +238,30 @@ function renderWizard() {
   $('wizard-next').innerHTML = wizardStep === 0 ? 'Подобрать варианты <span>→</span>' : wizardStep === 2 ? 'Оценить условия <span>→</span>' : wizardStep === 3 ? 'Согласовать и отправить в банк <span>→</span>' : 'Продолжить <span>→</span>';
   if (wizardStep === 0) {
     $('wizard-fields').innerHTML = `<div class="field"><label for="app-goal">Для чего нужны деньги?</label><input id="app-goal" name="goal" value="${escapeHTML(draft.goal)}" list="goal-options" minlength="3" maxlength="500" placeholder="Например, открыть кофейню и купить оборудование" required><datalist id="goal-options">${goalSuggestions.map(goal => `<option value="${escapeHTML(goal)}"></option>`).join('')}</datalist><p class="field-hint">Опишите цель своими словами или выберите подсказку.</p></div><div class="goal-suggestions" aria-label="Примеры целей кредита">${goalSuggestions.map(goal => `<button type="button" data-goal="${escapeHTML(goal)}">${escapeHTML(goal)}</button>`).join('')}</div><div class="form-grid">${field('requestedAmount', 'Сколько нужно, ₽', {min: 100000, max: 10000000})}${field('requestedMonths', 'На какой срок, месяцев', {type: 'number', min: 6, max: 60, step: 1})}</div><p class="muted">Сначала подберём варианты под ваши планы. Сведения о компании понадобятся после выбора.</p>`;
+  } else if (wizardStep === 1 && assessmentBusy) {
+    $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем варианты под вашу цель</h3></div>';
   } else if (wizardStep === 1) {
+    if (!draft.offers?.length) $('wizard-next').innerHTML = 'Повторить подбор <span>→</span>';
     $('wizard-fields').innerHTML = `<p class="muted">Варианты под запрос ${money(Number(draft.requestedAmount))} на ${draft.requestedMonths} мес. Выберите один, чтобы продолжить.</p><div class="offers-list">${offerCards()}</div><p class="small-note">Предварительные условия. После оценки бизнеса они могут измениться.</p>`;
   } else if (wizardStep === 2) {
     const product = products.find(p => p.id === draft.product);
-    $('wizard-fields').innerHTML = `<div class="info-banner"><p>Выбрано: <strong>${product.name}</strong> · ${money(Number(draft.amount))} на ${draft.months} мес.</p></div><div class="section-heading"><p class="muted">Расскажите о компании, чтобы оценить условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div><div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {min: 0, max: 1000000000})}${field('debt', 'Платежи по кредитам, ₽/мес.', {min: 0, max: 1000000000})}${field('age', 'Возраст бизнеса, месяцев', {type: 'number', min: 0, max: 1200, step: 1})}</div><div id="approval-indicator" class="approval-indicator" aria-live="polite"></div><p class="field-hint">Используйте вымышленные данные. Оценка пока демонстрационная.</p>`;
+    $('wizard-fields').innerHTML = `<div class="info-banner"><p>Выбрано: <strong>${product.name}</strong> · ${money(Number(draft.amount))} на ${draft.months} мес.</p></div><div class="section-heading"><p class="muted">Расскажите о компании, чтобы оценить условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div><div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {min: 0, max: 1000000000})}${field('debt', 'Платежи по кредитам, ₽/мес.', {min: 0, max: 1000000000})}${field('age', 'Возраст бизнеса, месяцев', {type: 'number', min: 0, max: 1200, step: 1})}</div><div id="approval-indicator" class="approval-indicator" aria-live="polite"></div><p class="field-hint">Индикатор — предварительная расчётная оценка. Далее условия проверит ИИ.</p>`;
   } else if (assessmentBusy) {
     $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем посильные условия</h3><p>Учитываем доходы, расходы и действующие обязательства компании.</p></div>';
   } else {
-    const assessment = advisor.assess(draft);
-    draft.assessment = assessment;
+    const assessment = draft.assessment;
+    if (!assessment) {
+      $('wizard-fields').innerHTML = '<p class="muted">Нужна актуальная оценка условий. Нажмите «Повторить оценку».</p>';
+      $('wizard-next').innerHTML = 'Повторить оценку <span>→</span>';
+      return;
+    }
     const reasons = `<ul class="assessment-reasons">${assessment.reasons.map(reason => `<li>${escapeHTML(reason)}</li>`).join('')}</ul>`;
     if (assessment.status === 'needs_info') {
       $('wizard-fields').innerHTML = `<h3>Нужно немного больше информации</h3>${reasons}<div class="field"><label for="app-clarification">Расскажите о договорах и источниках выручки</label><textarea id="app-clarification" name="clarification" minlength="20" maxlength="2000" required>${escapeHTML(draft.clarification)}</textarea></div>`;
       $('wizard-next').innerHTML = 'Продолжить оценку <span>→</span>';
-    } else if (assessment.status === 'unavailable') {
-      $('wizard-fields').innerHTML = `<h3>Пока не получается подобрать условия</h3>${reasons}<p class="muted">Это предварительная оценка, а не решение банка. Заявка не отправлена.</p>`;
-      $('wizard-next').innerHTML = 'Изменить параметры <span>→</span>';
+    } else if (['blocked', 'unavailable'].includes(assessment.status)) {
+      $('wizard-fields').innerHTML = `<h3>Слишком низкие шансы на согласование</h3>${reasons}<p class="muted">Это предварительная оценка, а не решение банка. Заявка не отправлена.</p>`;
+      $('wizard-next').innerHTML = 'Изменить условия <span>→</span>';
     } else {
       $('wizard-fields').innerHTML = `<div class="section-heading"><h3>Ваши условия к согласованию</h3><span class="offer-tag">Предварительная оценка</span></div>${comparison(assessment)}${reasons}<div class="info-banner"><p>Банк ещё не получил заявку и не принимал решение. Проверьте изменения и подтвердите согласие на отправку.</p></div><label class="checkbox-label"><input name="consent" type="checkbox" required><span>Согласен с указанными выше суммой, сроком, ставкой и платежом и хочу отправить заявку на подтверждение в банк.</span></label>`;
     }
@@ -235,22 +283,27 @@ function moveToStep(step) {
   persist();
   renderWizard();
 }
-function runAssessment() {
+async function runAssessment() {
   if (!user || !draft) {showRegistrationStep(); return;}
   clearTimeout(saveTimer);
   assessmentBusy = true;
+  draft.assessment = null;
   draft.stage = 3;
   wizardStep = 3;
-  persist();
-  renderWizard();
   const snapshot = draft;
-  assessmentTimer = setTimeout(() => {
-    if (draft !== snapshot) return;
-    assessmentBusy = false;
-    draft.assessment = advisor.assess(draft);
-    persist();
-    if ($('application-dialog').open) renderWizard();
-  }, 800);
+  const version = ++adviceVersion;
+  persist(); renderWizard();
+  let message;
+  try {
+    const result = await api('/credit/assessments', 'POST', assessmentPayload());
+    if (draft !== snapshot || version !== adviceVersion) return;
+    if (result.status === 401 || result.status === 403) {persist(); user = null; loadWorkspace(); pendingApplication = {}; showRegistrationStep(); return;}
+    if (!result.ok) {message = creditError(result); if (result.data?.detail === 'CREDIT_ADVICE_EXPIRED') {wizardStep = 0; draft.stage = 0;}}
+    else draft.assessment = result.data;
+  } catch { message = 'Не удалось получить оценку рисков. Попробуйте ещё раз.'; }
+  finally {
+    if (draft === snapshot && version === adviceVersion) {assessmentBusy = false; persist(); renderWizard(); if (message) wizardError(message);}
+  }
 }
 $('application-form').addEventListener('input', event => {
   if (!user || !draft) return;
@@ -271,48 +324,52 @@ $('application-form').addEventListener('submit', async event => {
     if (error) return wizardError(error);
     draft.selectedOffer = null;
     draft.assessment = null;
-    moveToStep(1);
+    await requestOffers();
   } else if (wizardStep === 1) {
-    const offer = advisor.recommend(draft).find(item => item.product === draft.selectedOffer);
+    if (!draft.offers?.length) {await requestOffers(); return;}
+    const offer = draft.offers.find(item => item.id === draft.selectedOffer);
     if (!offer) return wizardError('Выберите один из предложенных вариантов.');
-    Object.assign(draft, {product: offer.product, amount: offer.amount, months: offer.months});
+    Object.assign(draft, {product: offer.product, amount: offer.amount, months: offer.months, rate: offer.rate});
     moveToStep(2);
   } else if (wizardStep === 2) {
     const error = validate(draft);
     if (error) return wizardError(error);
-    runAssessment();
+    if (approvalEstimate(draft).level === 'critical') return wizardError('Слишком низкие шансы на согласование. Измените условия.');
+    await runAssessment();
   } else {
     const error = validate(draft);
     if (error) return wizardError(error);
-    const assessment = advisor.assess(draft);
-    if (assessment.status === 'unavailable') {moveToStep(0); return;}
-    if (assessment.status === 'needs_info') return wizardError('Добавьте описание доходов и договоров — минимум 20 символов.');
+    const assessment = draft.assessment;
+    if (!assessment) {await runAssessment(); return;}
+    if (['blocked', 'unavailable'].includes(assessment.status)) {moveToStep(2); return;}
+    if (assessment.status === 'needs_info') {
+      if ((draft.clarification || '').trim().length < 20) return wizardError('Добавьте описание доходов и договоров — минимум 20 символов.');
+      await runAssessment(); return;
+    }
     // Clarifications need a fresh assessment and a separate consent, never implicit submission.
-    if (!$('application-form').querySelector('[name="consent"]')) {runAssessment(); return;}
+    if (!$('application-form').querySelector('[name="consent"]')) {await runAssessment(); return;}
     if (!new FormData($('application-form')).get('consent')) return;
     applicationSubmitting = true;
     $('wizard-next').disabled = true;
     const snapshot = draft;
     const previousUserId = user.id;
-    let session;
-    try { session = await syncUser(); }
-    catch { applicationSubmitting = false; $('wizard-next').disabled = false; return wizardError('Не удалось проверить вход. Попробуйте ещё раз.'); }
+    let result;
+    try { result = await api('/credit/confirm', 'POST', {assessment_token: assessment.assessment_token, data: assessmentPayload(), consent: true}); }
+    catch { applicationSubmitting = false; $('wizard-next').disabled = false; return wizardError('Не удалось подтвердить условия. Попробуйте ещё раз.'); }
     applicationSubmitting = false;
     $('wizard-next').disabled = false;
-    if (!session || session.id !== previousUserId) {
-      persist();
-      user = session;
-      loadWorkspace();
-      pendingApplication = {};
-      if (!user) showRegistrationStep();
-      else {closeDialog('application-dialog'); beginApplication(); notify('Аккаунт изменился. Проверьте заявку в своём профиле.');}
-      return;
+    if (result.status === 401 || result.status === 403) {
+      persist(); user = null; loadWorkspace(); pendingApplication = {}; showRegistrationStep(); return;
     }
-    if (draft !== snapshot) return;
+    if (draft !== snapshot || user?.id !== previousUserId) return;
+    if (!result.ok) {
+      draft.assessment = null; persist(); renderWizard(); wizardError(creditError(result)); return;
+    }
     clearTimeout(saveTimer);
-    const createdAt = Date.now();
-    const item = {...draft, ...assessment.terms, assessment, selectedTerms: {amount: Number(draft.amount), months: Number(draft.months), rate: products.find(p => p.id === draft.product).rate}, flowVersion: 2, id: `${createdAt.toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`, status: 'bank_review', createdAt, agreedAt: createdAt};
-    applications.unshift(item);
+    const item = {...draft, ...assessment.terms, ...result.data, assessment,
+      selectedTerms: {amount: Number(draft.amount), months: Number(draft.months), rate: draft.rate},
+      flowVersion: 3, agreedAt: result.data.createdAt};
+    if (!applications.some(existing => existing.id === item.id)) applications.unshift(item);
     applications.splice(100);
     draft = null;
     persist();
@@ -338,7 +395,7 @@ function renderDetail() {
   $('detail-content').innerHTML = `<span class="status ${item.status}">${statusNames[item.status]}</span><p class="detail-intro">${current ? 'Вы согласовали условия. Заявка направлена на подтверждение банка. До его решения условия остаются предварительными.' : 'Эта заявка сохранена в предыдущем демонстрационном сценарии. Её статус не является подтверждением банка.'}</p><div class="timeline"><div class="done">Вариант выбран</div><div class="done">Условия согласованы</div><div class="${current ? 'current' : ''}">Подтверждение банка</div></div>${reviewData(item)}${current ? `<p class="field-hint">Согласовано ${new Date(item.agreedAt).toLocaleString('ru-RU')}.</p><div class="info-banner"><p>Отправка в банк пока моделируется. Реальный банк не подключён, автоматического одобрения нет.</p></div>` : ''}`;
 }
 function renderProfile() {
-  const account = !user ? '<div class="card profile-card"><h2>Рады знакомству</h2><p class="muted">Войдите или создайте аккаунт для работы с профилем. Регистрация обязательна для составления заявки.</p><button class="button primary" data-action="login">Войти</button><button class="button secondary" data-action="register">Создать аккаунт</button></div>' : `<div class="card profile-card"><h2>${escapeHTML(user.username)}</h2><div class="profile-data"><span>Электронная почта</span><strong>${escapeHTML(user.email)}</strong></div><div class="profile-data"><span>Почта подтверждена</span><strong>${user.is_verified ? 'Да' : 'Пока нет'}</strong></div><button class="button secondary" data-action="edit-profile">Изменить имя</button>${!user.is_verified ? '<button class="button secondary" data-action="request-verify">Подтвердить почту</button>' : ''}<button class="text-button" data-action="logout">Выйти из кабинета</button></div>`;
+  const account = !user ? '<div class="card profile-card"><h2>Рады знакомству</h2><p class="muted">Войдите или создайте аккаунт для работы с профилем. Регистрация обязательна для составления заявки.</p><button class="button primary" data-action="login">Войти</button><button class="button secondary" data-action="register">Создать аккаунт</button></div>' : `<div class="card profile-card"><h2>${escapeHTML(user.username)}</h2><div class="profile-data"><span>Электронная почта</span><strong>${escapeHTML(user.email)}</strong></div><button class="button secondary" data-action="edit-profile">Изменить имя</button><button class="text-button" data-action="logout">Выйти из кабинета</button></div>`;
   $('profile-content').innerHTML = `${account}<section class="section"><div class="section-heading"><h2>Заявки на подтверждении <span class="inline-count">${applications.filter(item => item.status === 'bank_review').length}</span></h2></div><div id="profile-applications">${applications.map(applicationCard).join('') || emptyApplications()}</div></section><div class="info-banner"><p>Демонстрационные заявки сохраняются на этом устройстве в вашем аккаунте.</p></div>`;
 }
 const accountFields = {
@@ -353,7 +410,6 @@ const accountModes = {
   register: {title: 'Давайте знакомиться', description: 'Создайте аккаунт для своего бизнеса.', fields: ['email', 'password', 'username', 'inn'], button: 'Создать аккаунт'},
   forgot: {title: 'Восстановить доступ', description: 'Отправим ссылку для смены пароля на вашу почту.', fields: ['email'], button: 'Получить ссылку'},
   reset: {title: 'Новый пароль', description: 'Придумайте пароль от 8 до 128 символов.', fields: ['token', 'password'], button: 'Сохранить пароль'},
-  verify: {title: 'Подтверждение почты', description: 'Подтвердите адрес, нажав кнопку ниже.', fields: ['token'], button: 'Подтвердить почту'},
   edit: {title: 'Как к вам обращаться?', description: 'Обновите имя в профиле.', fields: ['username'], button: 'Сохранить'},
 };
 function openAccount(mode) {
@@ -380,12 +436,12 @@ function errorMessage(data, mode) {
     return ({email: 'Проверьте адрес электронной почты.', inn: 'Проверьте ИНН компании.', username: 'Укажите имя от 3 до 20 символов.', password: 'Пароль должен содержать от 8 до 128 символов.'})[key] || 'Проверьте заполненные поля.';
   }
   const code = typeof detail === 'string' ? detail : detail?.code;
-  const messages = {LOGIN_BAD_CREDENTIALS: 'Не получилось войти. Проверьте почту и пароль.', REGISTER_USER_ALREADY_EXISTS: 'Аккаунт с такой почтой уже есть. Попробуйте войти.', REGISTER_INVALID_PASSWORD: 'Пароль должен содержать от 8 до 128 символов.', RESET_PASSWORD_BAD_TOKEN: 'Ссылка устарела или уже использована. Запросите новую.', RESET_PASSWORD_INVALID_PASSWORD: 'Пароль должен содержать от 8 до 128 символов.', VERIFY_USER_BAD_TOKEN: 'Ссылка недействительна или срок её действия истёк.', VERIFY_USER_ALREADY_VERIFIED: 'Эта почта уже подтверждена.'};
+  const messages = {LOGIN_BAD_CREDENTIALS: 'Не получилось войти. Проверьте почту и пароль.', REGISTER_USER_ALREADY_EXISTS: 'Аккаунт с такой почтой уже есть. Попробуйте войти.', REGISTER_INVALID_PASSWORD: 'Пароль должен содержать от 8 до 128 символов.', RESET_PASSWORD_BAD_TOKEN: 'Ссылка устарела или уже использована. Запросите новую.', RESET_PASSWORD_INVALID_PASSWORD: 'Пароль должен содержать от 8 до 128 символов.'};
   return messages[code] || (mode === 'login' ? 'Не удалось войти. Попробуйте ещё раз.' : 'Не удалось завершить действие. Попробуйте позже.');
 }
 async function api(path, method = 'GET', payload, form = false) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
+  const timeout = setTimeout(() => controller.abort(), path.startsWith('/credit/') ? 60000 : 20000);
   try {
     const response = await fetch(path, {method, credentials: 'same-origin', headers: payload ? {'Content-Type': form ? 'application/x-www-form-urlencoded' : 'application/json'} : {}, body: payload ? (form ? new URLSearchParams(payload) : JSON.stringify(payload)) : undefined, signal: controller.signal});
     const text = await response.text();
@@ -413,7 +469,6 @@ async function completeLogin() {
   else notify('Вы вошли в кабинет.');
 }
 function showRegistrationStep() {
-  clearTimeout(assessmentTimer);
   assessmentBusy = false;
   $('wizard-progress').innerHTML = ['1. Регистрация', '2. Ваши планы', '3. Варианты', '4. О компании', '5. Согласование'].map((label, index) => `<span class="${index === 0 ? 'active' : ''}" ${index === 0 ? 'aria-current="step"' : ''}>${label}</span>`).join('');
   $('wizard-fields').innerHTML = '<div class="registration-step"><h3>Сначала создайте аккаунт</h3><p>Регистрация обязательна для составления заявки. После неё вы сможете указать цель и сохранить заявку в своём профиле.</p><button type="button" class="button primary" data-action="register">Создать аккаунт <span>→</span></button><button type="button" class="button secondary" data-action="login">Уже есть аккаунт? Войти</button></div>';
@@ -431,7 +486,7 @@ $('account-form').addEventListener('submit', async event => {
   $('account-message').hidden = true;
   const mode = accountMode;
   const fields = Object.fromEntries(new FormData(event.target));
-  const paths = {login: '/auth/login', register: '/auth/register', forgot: '/auth/forgot-password', reset: '/auth/reset-password', verify: '/auth/verify', edit: '/users/me'};
+  const paths = {login: '/auth/login', register: '/auth/register', forgot: '/auth/forgot-password', reset: '/auth/reset-password', edit: '/users/me'};
   try {
     const result = await api(paths[mode], mode === 'edit' ? 'PATCH' : 'POST', mode === 'login' ? {username: fields.email, password: fields.password} : fields, mode === 'login');
     if (!result.ok) {
@@ -460,13 +515,12 @@ $('account-form').addEventListener('submit', async event => {
         $('account-message').hidden = false;
       }
     } else {
-      $('account-message').textContent = mode === 'forgot' ? 'Если аккаунт с такой почтой существует, мы отправим ссылку для восстановления.' : mode === 'reset' ? 'Пароль изменён. Теперь можно войти с новым паролем.' : 'Почта подтверждена. Можно вернуться в кабинет.';
+      $('account-message').textContent = mode === 'forgot' ? 'Если аккаунт с такой почтой существует, мы отправим ссылку для восстановления.' : mode === 'reset' ? 'Пароль изменён. Теперь можно войти с новым паролем.' : 'Пароль сохранён.';
       $('account-message').className = 'form-message';
       $('account-message').hidden = false;
       $('account-fields').replaceChildren();
       $('account-submit').hidden = true;
       $('account-links').innerHTML = '<button type="button" data-action="login">Перейти ко входу</button>';
-      if (mode === 'verify' && user) { user.is_verified = true; renderAll(); }
     }
   } catch {
     $('account-message').textContent = 'Не удалось связаться с сервисом. Проверьте соединение и попробуйте ещё раз.';
@@ -520,12 +574,6 @@ document.addEventListener('click', event => {
   if (['login', 'register', 'forgot'].includes(action)) { if ($('application-dialog').open) closeDialog('application-dialog'); $('account-submit').hidden = false; openAccount(action); }
   if (action === 'edit-profile' && user) openAccount('edit');
   if (action === 'logout') logout();
-  if (action === 'request-verify' && user) {
-    button.disabled = true;
-    api('/auth/request-verify-token', 'POST', {email: user.email}).then(result => {
-      notify(result.ok ? 'Если почта ожидает подтверждения, мы отправим письмо со ссылкой.' : 'Не удалось отправить письмо. Попробуйте позже.');
-    }).catch(() => notify('Проверьте соединение и попробуйте ещё раз.')).finally(() => {button.disabled = false;});
-  }
   if (action === 'sample' && user && draft) {
     Object.assign(draft, {company: 'ООО «Вектор»', inn: '7701234560', revenue: 1200000, expenses: 700000, debt: 20000, age: 24});
     persist(); renderWizard();
@@ -548,7 +596,7 @@ const params = new URLSearchParams(window.location.search);
 const flow = params.get('flow');
 const linkToken = params.get('token');
 if (params.has('token')) window.history.replaceState(null, '', '/demo');
-if (flow === 'reset' || flow === 'verify') {
+if (flow === 'reset') {
   openAccount(flow);
   if (linkToken) $('account-token').value = linkToken;
 }
@@ -562,18 +610,19 @@ $('menu-toggle').addEventListener('click', () => {showDialog('menu-dialog'); $('
 $('menu-dialog').addEventListener('close', () => {$('menu-toggle').setAttribute('aria-expanded', 'false');});
 
 function estimateMarkup(estimate) {
-  return `<div class="estimate-header"><span>Предварительная вероятность одобрения</span><strong class="estimate-label ${estimate.level}">${estimate.label}</strong></div><div class="estimate-track" role="img" aria-label="${estimate.label}"><span class="${estimate.level}" style="width:${estimate.score}%"></span></div>`;
+  return `<div class="estimate-header"><span>Предварительная вероятность одобрения</span><strong class="estimate-label ${estimate.level}">${estimate.label}</strong></div><div class="estimate-track" role="img" aria-label="${estimate.label}"><span class="${estimate.level}" style="width:${estimate.score}%;background:hsl(${Math.min(115, estimate.score * 1.3)} 42% 55%)"></span></div>`;
 }
 function updateApprovalIndicator() {
   if (!draft || !$('approval-indicator')) return;
   const estimate = approvalEstimate(draft);
-  $('approval-indicator').innerHTML = `${estimateMarkup(estimate)}<div class="estimate-context"><span>При сумме ${money(Number(draft.amount))} на ${draft.months} мес.</span>${estimate.level === 'low' ? '<button type="button" class="button secondary" data-action="adjust-amount">Изменить</button>' : ''}</div><p class="field-hint">Демо-оценка по указанным данным. Итоговое решение принимает банк.</p>`;
+  $('approval-indicator').innerHTML = `${estimateMarkup(estimate)}<div class="estimate-context"><span>При сумме ${money(Number(draft.amount))} на ${draft.months} мес.</span>${['low', 'critical'].includes(estimate.level) ? '<button type="button" class="button secondary" data-action="adjust-amount">Изменить</button>' : ''}</div>${estimate.level === 'critical' ? '<p class="form-message error">Слишком низкие шансы на согласование. На этих условиях завершить оформление нельзя. Измените сумму или другие условия.</p>' : ''}<p class="field-hint">Предварительная оценка по данным компании. Итоговое решение принимает банк.</p>`;
+  $('wizard-next').disabled = assessmentBusy || estimate.level === 'critical';
 }
 function updateAmountPreview() {
   const amount = Number($('adjust-amount').value);
   $('adjust-value').textContent = money(amount);
   const estimate = approvalEstimate({...draft, amount});
-  $('adjust-estimate').innerHTML = `${estimateMarkup(estimate)}<p class="muted">Примерный платёж: ${money(payment(amount, Number(draft.months), products.find(p => p.id === draft.product).rate))} в месяц</p>`;
+  $('adjust-estimate').innerHTML = `${estimateMarkup(estimate)}<p class="muted">Примерный платёж: ${money(payment(amount, Number(draft.months), (draft.rate ?? products.find(p => p.id === draft.product).rate)))} в месяц</p>`;
 }
 $('adjust-amount').addEventListener('input', updateAmountPreview);
 $('amount-adjust-form').addEventListener('submit', event => {
@@ -590,9 +639,10 @@ document.addEventListener('click', event => {
   if (!event.target.closest('[data-action="adjust-amount"]') || !user || !draft) return;
   captureDraft();
   const product = products.find(p => p.id === draft.product);
-  $('adjust-amount').max = product.max;
+  const maximum = draft.offers?.find(offer => offer.id === draft.selectedOffer)?.amount || product.max;
+  $('adjust-amount').max = maximum;
   $('adjust-amount').value = draft.amount;
-  $('adjust-max').textContent = money(product.max);
+  $('adjust-max').textContent = money(maximum);
   updateAmountPreview();
   showDialog('amount-dialog');
 });

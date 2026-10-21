@@ -18,7 +18,7 @@ class Base(DeclarativeBase):
 
 class User(SQLAlchemyBaseUserTable[int], Base):
     # уже есть в базовом классе: email (unique), hashed_password,
-    # is_active, is_superuser, is_verified
+    # is_active, is_superuser
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(20))
     inn: Mapped[str] = mapped_column(String(12))

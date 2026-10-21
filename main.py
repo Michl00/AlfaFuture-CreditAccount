@@ -11,6 +11,7 @@ from config.config import Config, load_config
 from services.db import User, create_db_and_tables
 from services.schemas import UserCreate, UserRead, UserUpdate
 from services.users import auth_backend, current_active_user, fastapi_users
+from services.credit_api import router as credit_router
 
 config: Config = load_config()
 
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(credit_router)
 demo_directory = Path(__file__).resolve().parent / "static" / "demo"
 app.mount("/demo/assets", StaticFiles(directory=demo_directory), name="demo-assets")
 
@@ -48,8 +50,6 @@ app.include_router(fastapi_users.get_auth_router(auth_backend),
 app.include_router(fastapi_users.get_register_router(UserRead, UserCreate),
                    prefix="/auth", tags=["auth"])
 app.include_router(fastapi_users.get_reset_password_router(),
-                   prefix="/auth", tags=["auth"])
-app.include_router(fastapi_users.get_verify_router(UserRead),
                    prefix="/auth", tags=["auth"])
 app.include_router(fastapi_users.get_users_router(UserRead, UserUpdate),
                    prefix="/users", tags=["users"])
