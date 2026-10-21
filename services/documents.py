@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.db import BankStaff, CreditApplication, UploadedDocument, User, get_async_session
 from services.services import valid_inn
-from services.users import current_active_user
+from services.users import current_active_user, current_credit_client
 
 router = APIRouter(prefix='/credit/documents', tags=['documents'])
 Session = Annotated[AsyncSession, Depends(get_async_session)]
@@ -135,7 +135,7 @@ async def owned_documents(session, user_id, ids):
     return rows
 
 
-@router.post('', status_code=201)
+@router.post('', status_code=201, dependencies=[Depends(current_credit_client)])
 async def upload_document(user: Owner, session: Session, file: UploadFile = File(...)):
     content = await file.read(MAX_SIZE + 1)
     await file.close()

@@ -21,11 +21,11 @@ from services.checks import run_checks
 from services.documents import owned_documents
 from services.bank import application_view
 from services.services import valid_inn
-from services.users import current_active_user
+from services.users import current_credit_client
 
 config = load_config()
 router = APIRouter(prefix='/credit', tags=['credit'])
-ActiveUser = Annotated[User, Depends(current_active_user)]
+ActiveUser = Annotated[User, Depends(current_credit_client)]
 Session = Annotated[AsyncSession, Depends(get_async_session)]
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
@@ -73,10 +73,9 @@ class GeneratedOffers(StrictModel):
 
 
 class RiskResult(StrictModel):
-    status: Literal['ready', 'needs_info', 'blocked']
     risk: Literal['low', 'medium', 'high', 'critical']
-    approval_probability: float = Field(ge=0, le=1)
     reasons: list[str] = Field(min_length=1, max_length=6)
+    needs_info: bool = False
     terms: Terms | None = None
 
     @field_validator('reasons')
@@ -293,31 +292,40 @@ async def assess(data: AssessmentInput, user: ActiveUser, session: Session):
     # Identifying fields and document contents are not forwarded to the model.
     financial = data.model_dump(exclude={'recommendation_token', 'offer_id', 'company', 'inn', 'document_ids'})
     answer = await ask_model(
-        'Оцени риски по выбранному варианту и финансовым данным. Доступный платёж: '
+        'Оцени только риски и условия по выбранному варианту и финансовым данным. '
+        'Не принимай решение об одобрении или отказе и не оценивай вероятность одобрения: '
+        'окончательное решение принимает сотрудник банка в своей панели. '
+        'Повышенный риск high требует внимания сотрудника, но сам по себе не запрещает отправку. '
+        'Только недопустимо высокий риск обозначай critical и объясняй конкретные причины. Доступный платёж: '
         '0.5 * (выручка - расходы) - действующие платежи. При необходимости уменьши сумму, '
         'увеличь срок в пределах продукта, скорректируй ставку. Платёж по итоговым условиям '
-        'должен быть посильным. При крайне низкой вероятности (<0.15) или невозможности '
-        'подобрать условия верни blocked, без разрешения отправки. Для возраста <6 месяцев '
-        'без содержательного уточнения верни needs_info. Вероятность является лишь оценкой модели. '
+        'должен быть посильным. Если корректировка не нужна, terms можно не указывать: '
+        'сохраняются выбранные клиентом условия. Если для оценки не хватает данных, '
+        'верни needs_info=true и перечисли необходимые уточнения. Для возраста <6 месяцев '
+        'без содержательного уточнения также верни needs_info=true. '
         'Результаты external_checks являются синтетическими моками, не реальными проверками. '
         'Учитывай предупреждения и расхождения документов, нестандартные случаи требуют сотрудника. '
         'Каталог: ' + json.dumps(CATALOG),
         {'original_request': context['request'], 'selected_offer': offer, 'company_financials': financial, 'external_checks': checks, 'scoring': initial_score}, RiskResult)
-    original = {'amount': data.amount, 'months': offer['months'], 'rate': offer['rate']}
-    terms = answer.terms.model_dump() if answer.terms else None
-    if terms and (terms['amount'] > min(data.amount, CATALOG[offer['product']]['max']) or terms['months'] > CATALOG[offer['product']]['months']):
-        raise HTTPException(502, 'CREDIT_AI_INVALID_TERMS')
-    blocked = answer.status == 'blocked' or answer.risk == 'critical' or answer.approval_probability < 0.15 or capacity_ratio(data, original) < 0.3
-    if terms and capacity_ratio(data, terms) < 1:
-        blocked = True
+    # The model supplies evidence, never a lending decision. The server applies
+    # the risk guardrails; every permitted application still needs a bank employee.
+    terms = answer.terms.model_dump() if answer.terms else original.copy()
+    blocked = answer.risk == 'critical' or capacity_ratio(data, original) < 0.3
     if blocked:
-        result, _ = await save_result({'status': 'blocked', 'risk': 'critical', 'reasons': ['Слишком низкие шансы на согласование. Измените сумму, срок или финансовые данные.'], 'terms': None, 'assessment_token': None})
+        reasons = answer.reasons if answer.risk == 'critical' else ['Недостаточно свободных средств для безопасной кредитной нагрузки. Измените сумму, срок или финансовые данные.']
+        result, _ = await save_result({'status': 'blocked', 'risk': 'critical', 'reasons': reasons, 'terms': None, 'assessment_token': None})
         return result
-    if answer.status == 'needs_info' or data.age < 6 and len(data.clarification.strip()) < 20:
+    if answer.needs_info or data.age < 6 and len(data.clarification.strip()) < 20:
         result, _ = await save_result({'status': 'needs_info', 'risk': answer.risk, 'reasons': answer.reasons, 'terms': None, 'assessment_token': None})
         return result
-    if answer.status != 'ready' or terms is None:
+    if terms['amount'] > min(data.amount, CATALOG[offer['product']]['max']) or terms['months'] > CATALOG[offer['product']]['months']:
+        logger.warning('Credit assessment failure reason=invalid_terms product=%s', offer['product'])
         raise HTTPException(502, 'CREDIT_AI_INVALID_TERMS')
+    if capacity_ratio(data, terms) < 1:
+        result, _ = await save_result({'status': 'blocked', 'risk': 'critical',
+            'reasons': ['Платёж по предложенным условиям превышает безопасную нагрузку. Измените сумму, срок или финансовые данные.'],
+            'terms': None, 'assessment_token': None})
+        return result
     result, record = await save_result({'status': 'ready', 'risk': answer.risk, 'reasons': answer.reasons,
         'terms': {**terms, 'payment': monthly_payment(**terms)}}, terms)
     signed = sign({'fingerprint': fingerprint(data), 'terms': terms, 'risk': answer.risk,

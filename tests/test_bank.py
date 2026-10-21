@@ -56,6 +56,27 @@ class BankTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.patch('/users/me', json={'role': 'bank_employee'})).status_code, 422)
         self.assertEqual((await self.client.get('/bank/me')).status_code, 403)
 
+    async def test_staff_cannot_use_client_endpoints_or_edit_profile_inn(self):
+        _, data = await self.prepare()
+        assessment = (await self.assess(data)).json()
+        await self.employee()
+        for path, payload in [
+            ('recommendations', {'goal': 'Оборудование', 'requestedAmount': 1500000, 'requestedMonths': 24}),
+            ('assessments', data),
+            ('confirm', {'assessment_token': assessment['assessment_token'], 'data': data, 'consent': True}),
+        ]:
+            response = await self.client.post('/credit/' + path, json=payload)
+            self.assertEqual(response.status_code, 403, response.text)
+            self.assertEqual(response.json()['detail'], 'BANK_STAFF_CREDIT_FORBIDDEN')
+        self.assertEqual((await self.client.get('/credit/applications')).status_code, 403)
+        response = await self.client.post('/credit/documents', files={'file': ('a.json', b'{"revenue": 100}', 'application/json')})
+        self.assertEqual(response.status_code, 403)
+        response = await self.client.patch('/users/me', json={'inn': '7707083893'})
+        self.assertEqual(response.status_code, 403)
+        response = await self.client.patch('/users/me', json={'username': 'Новое имя'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual((await self.client.get('/bank/me')).status_code, 200)
+
     async def test_console_can_grant_and_revoke_staff_access(self):
         import manage
         await self.login()
@@ -85,6 +106,22 @@ class BankTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(approved['status'], 'approved')
         self.assertEqual([event['action'] for event in approved['events']], ['submit', 'claim', 'approve'])
         self.assertEqual((await self.action(approved, 'reject')).status_code, 409)
+
+    async def test_high_ai_risk_reaches_employee_without_automatic_approval(self):
+        _, data = await self.prepare()
+        answer = credit.RiskResult(risk='high', reasons=['Нестандартный риск требует рассмотрения'])
+        assessment = (await self.assess(data, answer)).json()
+        result = await self.client.post('/credit/confirm', json={
+            'assessment_token': assessment['assessment_token'], 'data': data, 'consent': True})
+        self.assertEqual(result.status_code, 200, result.text)
+        item = result.json()
+        self.assertEqual(item['status'], 'bank_review')
+        await self.employee()
+        queue = (await self.client.get('/bank/applications?status=bank_review&manual_only=true')).json()
+        self.assertEqual(queue['items'][0]['id'], item['id'])
+        detail = (await self.client.get('/bank/applications/' + item['id'])).json()
+        self.assertEqual(detail['ai_reasons'], answer.reasons)
+        self.assertEqual([event['action'] for event in detail['events']], ['submit'])
 
     async def test_other_employee_cannot_claim_an_assigned_application(self):
         item = await self.submit()
@@ -134,7 +171,7 @@ class BankTests(unittest.IsolatedAsyncioTestCase):
         downloaded = await self.client.get(path)
         self.assertEqual(downloaded.status_code, 200)
         self.assertEqual(downloaded.headers['x-content-type-options'], 'nosniff')
-        self.assertEqual((await self.client.get('/credit/applications/' + item['id'])).status_code, 404)
+        self.assertEqual((await self.client.get('/credit/applications/' + item['id'])).status_code, 403)
         detail = (await self.client.get('/bank/applications/' + item['id'])).json()
         self.assertEqual(detail['documents'][0]['id'], doc['id'])
         # An ordinary unrelated client cannot read either the file or the application.

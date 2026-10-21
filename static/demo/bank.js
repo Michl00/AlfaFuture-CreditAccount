@@ -22,15 +22,12 @@
     get('bank-queue').replaceChildren();
     get('bank-detail').replaceChildren();
     if (get('bank-detail-dialog').open) get('bank-detail-dialog').close();
-    if (!owner) return;
-    try {
-      const result = await api('/bank/me');
-      if (result.ok && getUser()?.id === owner.id) {
-        employee = result.data;
-        get('bank-menu').hidden = false;
-      }
-    } catch { /* The protected server routes remain authoritative. */ }
+    if (!owner?.is_employee) return;
+    employee = owner;
+    get('bank-menu').hidden = false;
+    if (!get('bank-page').hidden) await loadQueue();
   }
+
   async function loadQueue(append = false) {
     if (!employee) {get('bank-message').textContent = 'Доступ только сотрудникам банка.'; return;}
     const version = ++queueVersion;

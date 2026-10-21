@@ -10,10 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.checks import run_checks
 from services.db import ApplicationEvent, BankStaff, CreditApplication, User, get_async_session
 from services.documents import owned_documents
-from services.users import current_active_user
+from services.users import current_active_user, current_credit_client
 
 router = APIRouter(prefix='/bank', tags=['bank'])
-client_router = APIRouter(prefix='/credit/applications', tags=['applications'])
+client_router = APIRouter(prefix='/credit/applications', tags=['applications'], dependencies=[Depends(current_credit_client)])
 Session = Annotated[AsyncSession, Depends(get_async_session)]
 ActiveUser = Annotated[User, Depends(current_active_user)]
 

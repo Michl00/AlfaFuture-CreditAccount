@@ -10,7 +10,8 @@ class UserRead(BaseModel):
     email: EmailStr
     is_active: bool
     is_superuser: bool
-    username: str            # ИНН наружу не отдаём
+    username: str
+    inn: str | None = None
 
 
 class UserCreate(schemas.CreateUpdateDictModel):
@@ -20,11 +21,13 @@ class UserCreate(schemas.CreateUpdateDictModel):
     is_active: bool = True
     is_superuser: bool = False
     username: str = Field(min_length=3, max_length=20)
-    inn: str
+    inn: str | None = None
 
     @field_validator("inn")
     @classmethod
-    def check_inn(cls, v: str) -> str:
+    def check_inn(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
         v = v.strip()
         if not valid_inn(v):
             raise ValueError("некорректный ИНН")
@@ -38,3 +41,6 @@ class UserUpdate(schemas.CreateUpdateDictModel):
     is_active: bool | None = None
     is_superuser: bool | None = None
     username: str | None = Field(default=None, min_length=3, max_length=20)
+    inn: str | None = None
+
+    check_inn = field_validator('inn')(UserCreate.check_inn.__func__)

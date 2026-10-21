@@ -3,7 +3,8 @@ from typing import Annotated
 
 from fastapi import Depends
 from fastapi_users.db import SQLAlchemyBaseUserTable, SQLAlchemyUserDatabase
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, JSON, LargeBinary, event
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, JSON, LargeBinary, MetaData, event, inspect
+from sqlalchemy.schema import CreateTable, CreateIndex
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -21,7 +22,7 @@ class User(SQLAlchemyBaseUserTable[int], Base):
     # is_active, is_superuser
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(20))
-    inn: Mapped[str] = mapped_column(String(12))
+    inn: Mapped[str | None] = mapped_column(String(12), nullable=True)
 
     __table_args__ = (
         CheckConstraint("length(username) BETWEEN 3 AND 20", name="ck_username_len"),
@@ -95,8 +96,42 @@ def _set_pragmas(dbapi_conn, _):
 
 
 async def create_db_and_tables() -> None:
+    await migrate_optional_inn(engine)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+async def migrate_optional_inn(db_engine) -> None:
+    """Rebuild the legacy SQLite user table without losing accounts or references."""
+    async with db_engine.connect() as conn:
+        columns = await conn.run_sync(lambda sync: inspect(sync).get_columns('user')
+            if inspect(sync).has_table('user') else [])
+        if not any(column['name'] == 'inn' and not column['nullable'] for column in columns):
+            return
+        await conn.commit()
+        # SQLite requires foreign keys to be disabled outside the transaction
+        # while replacing a table referenced by applications and documents.
+        await conn.exec_driver_sql('PRAGMA foreign_keys = OFF')
+        await conn.commit()
+        try:
+            await conn.exec_driver_sql('BEGIN IMMEDIATE')
+            replacement = User.__table__.to_metadata(MetaData(), name='user_optional_inn')
+            await conn.execute(CreateTable(replacement))
+            names = ', '.join(conn.dialect.identifier_preparer.quote(column.name) for column in User.__table__.columns)
+            await conn.exec_driver_sql(f'INSERT INTO user_optional_inn ({names}) SELECT {names} FROM user')
+            await conn.exec_driver_sql('DROP TABLE user')
+            await conn.exec_driver_sql('ALTER TABLE user_optional_inn RENAME TO user')
+            for index in User.__table__.indexes:
+                await conn.execute(CreateIndex(index))
+            if (await conn.exec_driver_sql('PRAGMA foreign_key_check')).first():
+                raise RuntimeError('User migration failed foreign key validation')
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+        finally:
+            await conn.exec_driver_sql('PRAGMA foreign_keys = ON')
+            await conn.commit()
 
 
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
