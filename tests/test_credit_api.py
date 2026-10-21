@@ -165,4 +165,55 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
             with patch.object(credit.config.comet, 'api_key', 'test-only-key'), patch.object(credit.config.comet, 'model', 'configured-qwen-id'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
                 with self.assertRaises(credit.HTTPException) as error:
                     await credit.ask_model('task', {}, credit.GeneratedOffers)
-                self.assertEqual(error.exception.detail, 'CREDIT_AI_UNAVAILABLE')
+                self.assertEqual(error.exception.detail, 'CREDIT_AI_INVALID_RESPONSE')
+
+    async def test_provider_http_failures_are_classified_without_leaking_response(self):
+        for status, code in [(401, 'AUTH_FAILED'), (402, 'BALANCE_REQUIRED'),
+                (403, 'ACCESS_DENIED'), (404, 'MODEL_NOT_FOUND'), (429, 'RATE_LIMIT'),
+                (400, 'REQUEST_REJECTED'), (503, 'UNAVAILABLE')]:
+            client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(status,
+                json={'error': {'message': 'private-provider-message'}})))
+            with patch.object(credit.config.comet, 'api_key', 'private-api-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
+                with self.assertRaises(credit.HTTPException) as error:
+                    await credit.ask_model('task', {'goal': 'private-goal'}, credit.GeneratedOffers)
+            self.assertEqual(error.exception.detail, 'CREDIT_AI_' + code)
+            self.assertIn(f'upstream_status={status}', logs.output[0])
+            for private in ('private-provider-message', 'private-api-key', 'private-goal'):
+                self.assertNotIn(private, '\n'.join(logs.output))
+
+    async def test_rejected_json_mode_retries_once_without_response_format(self):
+        requests = []
+        def handler(request):
+            requests.append(json.loads(request.content))
+            if len(requests) == 1:
+                return httpx.Response(400, json={'error': {'param': 'response_format', 'message': 'unsupported parameter'}})
+            return httpx.Response(200, json={'choices': [{'message': {'content': '```json\n' + OFFERS.model_dump_json() + '\n```'}}]})
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+            result = await credit.ask_model('task', {}, credit.GeneratedOffers)
+        self.assertEqual(len(result.offers), 2)
+        self.assertEqual(len(requests), 2)
+        self.assertIn('response_format', requests[0])
+        self.assertNotIn('response_format', requests[1])
+
+    async def test_timeout_and_connection_errors_have_specific_codes_without_retry(self):
+        for exception, code, status in [(httpx.ReadTimeout, 'TIMEOUT', 504), (httpx.ConnectError, 'CONNECTION_FAILED', 502)]:
+            calls = []
+            def handler(request):
+                calls.append(request)
+                raise exception('private network detail', request=request)
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+                with self.assertRaises(credit.HTTPException) as error:
+                    await credit.ask_model('task', {}, credit.GeneratedOffers)
+            self.assertEqual(error.exception.detail, 'CREDIT_AI_' + code)
+            self.assertEqual(error.exception.status_code, status)
+            self.assertEqual(len(calls), 1)
+
+    async def test_truncated_response_cannot_be_used_as_valid_advice(self):
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
+            json={'choices': [{'finish_reason': 'length', 'message': {'content': OFFERS.model_dump_json()}}]})))
+        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+            with self.assertRaises(credit.HTTPException) as error:
+                await credit.ask_model('task', {}, credit.GeneratedOffers)
+        self.assertEqual(error.exception.detail, 'CREDIT_AI_RESPONSE_TRUNCATED')

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -27,6 +28,7 @@ ActiveUser = Annotated[User, Depends(current_active_user)]
 Session = Annotated[AsyncSession, Depends(get_async_session)]
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 CATALOG = {
     'working': {'max': 10000000, 'months': 36, 'rate': 24.9},
     'equipment': {'max': 10000000, 'months': 60, 'rate': 22.9},
@@ -168,19 +170,64 @@ async def ask_model(task, payload, schema):
         'Не придумывай проверенные кредитные истории, реестры или документы. '
         'Каталог и ограничения обязательны. ' + task + '\nJSON schema: ' + json.dumps(schema.model_json_schema(), ensure_ascii=False)
     )
+    request_body = {'model': config.comet.model, 'messages': [
+        {'role': 'system', 'content': system},
+        {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
+    ], 'temperature': 0.2, 'max_tokens': 3500, 'response_format': {'type': 'json_object'}}
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(45, connect=10), follow_redirects=False) as client:
             response = await client.post('https://api.cometapi.com/v1/chat/completions',
                 headers={'Authorization': f'Bearer {config.comet.api_key}'},
-                json={'model': config.comet.model, 'messages': [
-                    {'role': 'system', 'content': system},
-                    {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
-                ], 'temperature': 0.2, 'max_tokens': 3500, 'response_format': {'type': 'json_object'}})
+                json=request_body)
+            # Some OpenAI-compatible model routes reject JSON mode. Retry only an
+            # explicit parameter rejection, never a timeout or completed generation.
+            if response.status_code in (400, 422):
+                try:
+                    upstream = response.json().get('error', {})
+                    message = str(upstream.get('message', '')).lower() if isinstance(upstream, dict) else ''
+                    unsupported = isinstance(upstream, dict) and (upstream.get('param') == 'response_format'
+                        or 'response_format' in message and any(word in message for word in ('unsupported', 'not support', 'not allowed')))
+                except (ValueError, AttributeError):
+                    unsupported = False
+                if unsupported:
+                    logger.warning('CometAPI retry reason=unsupported_response_format model=%s', config.comet.model)
+                    request_body.pop('response_format')
+                    response = await client.post('https://api.cometapi.com/v1/chat/completions',
+                        headers={'Authorization': f'Bearer {config.comet.api_key}'}, json=request_body)
         response.raise_for_status()
-        content = response.json()['choices'][0]['message']['content']
+        choice = response.json()['choices'][0]
+        if choice.get('finish_reason') == 'length':
+            logger.warning('CometAPI failure reason=truncated_response model=%s', config.comet.model)
+            raise HTTPException(502, 'CREDIT_AI_RESPONSE_TRUNCATED')
+        content = choice['message']['content']
+        if not isinstance(content, str):
+            raise ValueError('Expected text content')
+        # Accept a single Markdown JSON fence; do not recover arbitrary fragments
+        # or relax schema and financial validation.
+        fenced = re.fullmatch(r'\s*```(?:json)?\s*\n?(.*?)\s*```\s*', content, re.DOTALL | re.IGNORECASE)
+        if fenced:
+            content = fenced.group(1)
         return schema.model_validate_json(content)
-    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError, ValidationError):
-        # Never return upstream messages or log credentials/customer data.
+    except httpx.HTTPStatusError as error:
+        status = error.response.status_code
+        detail = {401: 'CREDIT_AI_AUTH_FAILED', 403: 'CREDIT_AI_ACCESS_DENIED',
+            402: 'CREDIT_AI_BALANCE_REQUIRED', 404: 'CREDIT_AI_MODEL_NOT_FOUND',
+            429: 'CREDIT_AI_RATE_LIMIT', 400: 'CREDIT_AI_REQUEST_REJECTED',
+            422: 'CREDIT_AI_REQUEST_REJECTED'}.get(status, 'CREDIT_AI_UNAVAILABLE')
+        logger.warning('CometAPI failure reason=%s upstream_status=%s model=%s', detail, status, config.comet.model)
+        raise HTTPException(502, detail) from None
+    except httpx.TimeoutException:
+        logger.warning('CometAPI failure reason=timeout model=%s', config.comet.model)
+        raise HTTPException(504, 'CREDIT_AI_TIMEOUT') from None
+    except httpx.RequestError:
+        logger.warning('CometAPI failure reason=connection_error model=%s', config.comet.model)
+        raise HTTPException(502, 'CREDIT_AI_CONNECTION_FAILED') from None
+    except (KeyError, IndexError, AttributeError, TypeError, ValueError, ValidationError):
+        # Log only a category, never upstream messages or credential/customer data.
+        logger.warning('CometAPI failure reason=invalid_response model=%s', config.comet.model)
+        raise HTTPException(502, 'CREDIT_AI_INVALID_RESPONSE') from None
+    except httpx.HTTPError:
+        logger.warning('CometAPI failure reason=transport_error model=%s', config.comet.model)
         raise HTTPException(502, 'CREDIT_AI_UNAVAILABLE') from None
 
 
