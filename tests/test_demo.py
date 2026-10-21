@@ -51,7 +51,8 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('text/html', response.headers['content-type'])
         self.assertEqual(response.headers['referrer-policy'], 'no-referrer')
         self.assertEqual(response.headers['cache-control'], 'no-store')
-        for asset, content_type in [('app.js', 'javascript'), ('style.css', 'text/css')]:
+        self.assertEqual((await self.client.get('/')).status_code, 200)
+        for asset, content_type in [('app.js', 'javascript'), ('credit.js', 'javascript'), ('style.css', 'text/css')]:
             path = f'/demo/assets/{asset}'
             self.assertIn(path, response.text)
             asset_response = await self.client.get(path)

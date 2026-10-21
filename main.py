@@ -35,6 +35,7 @@ demo_directory = Path(__file__).resolve().parent / "static" / "demo"
 app.mount("/demo/assets", StaticFiles(directory=demo_directory), name="demo-assets")
 
 
+@app.get("/", include_in_schema=False)
 @app.get("/demo", include_in_schema=False)
 async def demo():
     return FileResponse(demo_directory / "index.html", headers={
