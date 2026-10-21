@@ -239,3 +239,10 @@ class DocumentParserTests(unittest.TestCase):
             self.assertEqual(configured.comet.api_key, 'new-test-key')
             os.environ['COMETAPI_KEY'] = ''
             self.assertEqual(load_config().comet.api_key, 'old-test-key')
+            self.assertEqual(load_config().comet.timeout_seconds, 180)
+            os.environ['COMETAPI_TIMEOUT_SECONDS'] = '240'
+            self.assertEqual(load_config().comet.timeout_seconds, 240)
+            for invalid in ('0', '301', 'nan'):
+                os.environ['COMETAPI_TIMEOUT_SECONDS'] = invalid
+                with self.assertRaises(ValueError):
+                    load_config()

@@ -32,6 +32,11 @@ class LogConfig:
 class CometConfig:
     api_key: str = field(default='', repr=False)
     model: str = 'qwen3.8-flash'
+    timeout_seconds: float = 180
+
+    def __post_init__(self):
+        if not 30 <= self.timeout_seconds <= 300:
+            raise ValueError('COMETAPI_TIMEOUT_SECONDS must be between 30 and 300')
 
 @dataclass
 class Config:
@@ -70,5 +75,6 @@ def load_config(path: str | None = None) -> Config:
         comet=CometConfig(
             api_key=env.str('COMETAPI_KEY', default='') or env.str('COMETAPI_API_KEY', default=''),
             model=env.str('COMETAPI_MODEL', default='qwen3.8-flash'),
+            timeout_seconds=env.float('COMETAPI_TIMEOUT_SECONDS', default=180),
         ),
     )

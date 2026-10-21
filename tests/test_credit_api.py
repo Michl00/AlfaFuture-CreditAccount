@@ -1,3 +1,4 @@
+import asyncio
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -209,6 +210,51 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(error.exception.detail, 'CREDIT_AI_' + code)
             self.assertEqual(error.exception.status_code, status)
             self.assertEqual(len(calls), 1)
+
+    async def test_slow_valid_response_uses_configured_timeout(self):
+        async def handler(request):
+            await asyncio.sleep(0.02)
+            return httpx.Response(200, json={'choices': [{'message': {'content': OFFERS.model_dump_json()}}]})
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch.object(credit.config.comet, 'timeout_seconds', 0.5), patch('services.credit_api.httpx.AsyncClient', return_value=client) as factory:
+            result = await credit.ask_model('task', {}, credit.GeneratedOffers)
+        self.assertEqual(len(result.offers), 2)
+        self.assertEqual(factory.call_args.kwargs['timeout'].read, 0.5)
+        self.assertEqual(factory.call_args.kwargs['timeout'].connect, 20)
+
+    async def test_total_deadline_includes_json_mode_retry_and_cancels_request(self):
+        calls = []
+        cancelled = asyncio.Event()
+        async def handler(request):
+            calls.append(request)
+            if len(calls) == 1:
+                return httpx.Response(400, json={'error': {'param': 'response_format'}})
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch.object(credit.config.comet, 'timeout_seconds', 0.02), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
+            with self.assertRaises(credit.HTTPException) as error:
+                await credit.ask_model('task', {}, credit.GeneratedOffers)
+        self.assertEqual(error.exception.status_code, 504)
+        self.assertEqual(error.exception.detail, 'CREDIT_AI_TIMEOUT')
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(cancelled.is_set())
+        self.assertTrue(client.is_closed)
+        self.assertIn('phase=total', logs.output[-1])
+
+    async def test_connection_and_response_timeouts_have_distinct_log_phases(self):
+        for exception, phase in [(httpx.ConnectTimeout, 'connect'), (httpx.ReadTimeout, 'read')]:
+            def handler(request):
+                raise exception('private-network-detail', request=request)
+            client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
+                with self.assertRaises(credit.HTTPException):
+                    await credit.ask_model('task', {}, credit.GeneratedOffers)
+            self.assertIn('phase=' + phase, logs.output[0])
+            self.assertNotIn('private-network-detail', logs.output[0])
 
     async def test_truncated_response_cannot_be_used_as_valid_advice(self):
         client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
