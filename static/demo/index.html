@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>CreditAccount · API Playground</title>
+  <link rel="stylesheet" href="/demo/assets/style.css">
+  <script src="/demo/assets/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/demo"><span class="brand-mark">A</span><span>CreditAccount <small>DEVELOPER TOOLS</small></span></a>
+    <div class="top-links"><span class="environment"><i></i> Same-origin API</span><a href="/docs" target="_blank" rel="noreferrer">Swagger ↗</a></div>
+  </header>
+  <div class="layout">
+    <aside aria-label="Методы API">
+      <div class="sidebar-label">WORKSPACE <span>01</span></div>
+      <h2>API Playground</h2>
+      <p class="sidebar-description">От запроса до ответа.</p>
+      <nav id="operations" aria-label="Выберите запрос"></nav>
+      <div class="sidebar-note"><span class="note-icon">↔</span><div>Настоящие запросы<p>Все действия выполняются в текущем приложении.</p></div></div>
+    </aside>
+    <main>
+      <div class="page-heading"><div><div class="eyebrow">REST / USERS & AUTH</div><h1>Проверим API в деле<span>.</span></h1><p>Выберите метод, заполните поля и посмотрите ответ сервера.</p></div><span class="demo-badge">DEMO</span></div>
+      <div class="session-bar"><span><i class="session-dot"></i>Авторизация через cookie</span><span>Сессия общая с приложением · <a href="/docs">OpenAPI ↗</a></span></div>
+      <div class="workspace">
+        <section class="panel request-panel" aria-labelledby="operation-title">
+          <div class="panel-heading"><span class="step">01</span><h2>Запрос</h2><span class="panel-label">REQUEST</span></div>
+          <div class="panel-content">
+            <h3 id="operation-title"></h3><p id="operation-description" class="description"></p>
+            <form id="request-form">
+              <div id="endpoint" class="endpoint"><span id="method-badge" class="method"></span><code id="endpoint-path"></code></div>
+              <div id="fields"></div>
+              <p id="operation-note" class="form-note"></p>
+              <button id="send" class="primary" type="submit"><span>Отправить запрос</span><span>↗</span></button>
+            </form>
+            <p class="shortcut">Ctrl / ⌘ + Enter — отправить</p>
+          </div>
+        </section>
+        <section class="panel response-panel" aria-labelledby="response-heading">
+          <div class="panel-heading"><span class="step">02</span><h2 id="response-heading">Ответ сервера</h2><span id="response-status" class="status" role="status">Ожидание</span></div>
+          <div class="response-tabs" role="tablist" aria-label="Детали запроса">
+            <button id="tab-response" role="tab" aria-selected="true" aria-controls="response-view" data-tab="response">Ответ</button>
+            <button id="tab-request" role="tab" aria-selected="false" aria-controls="request-view" data-tab="request" tabindex="-1">Запрос</button>
+            <button id="tab-headers" role="tab" aria-selected="false" aria-controls="headers-view" data-tab="headers" tabindex="-1">Заголовки</button>
+            <button id="copy" class="copy-button" type="button" aria-label="Копировать содержимое">Копировать</button>
+          </div>
+          <div id="empty-state" class="empty-state"><div class="terminal-icon">&gt;_</div><h3>Здесь появится ответ</h3><p>Отправьте первый запрос.<br>Покажем статус, время и тело ответа.</p><span>READY WHEN YOU ARE</span></div>
+          <pre id="response-view" role="tabpanel" aria-labelledby="tab-response" hidden></pre>
+          <pre id="request-view" role="tabpanel" aria-labelledby="tab-request" hidden></pre>
+          <pre id="headers-view" role="tabpanel" aria-labelledby="tab-headers" hidden></pre>
+          <div class="response-footer"><span id="response-meta">JSON / TEXT</span><span id="copy-status" role="status">Без сохранения в браузере</span></div>
+        </section>
+      </div>
+      <section class="history-section" aria-labelledby="history-title"><div class="history-heading"><h2 id="history-title">Последние запросы <span id="history-count">0</span></h2><button id="clear-history" type="button">Очистить</button></div><div id="history"><p class="history-empty">История запросов появится здесь и исчезнет после перезагрузки страницы.</p></div></section>
+      <footer>CreditAccount API <span>Тестовая консоль · Пароли и токены скрыты в просмотре запроса</span></footer>
+    </main>
+  </div>
+</body>
+</html>

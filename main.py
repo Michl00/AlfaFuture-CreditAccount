@@ -1,8 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from config.config import Config, load_config
 from services.db import User, create_db_and_tables
@@ -28,6 +31,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+demo_directory = Path(__file__).resolve().parent / "static" / "demo"
+app.mount("/demo/assets", StaticFiles(directory=demo_directory), name="demo-assets")
+
+
+@app.get("/demo", include_in_schema=False)
+async def demo():
+    return FileResponse(demo_directory / "index.html", headers={
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+    })
 
 app.include_router(fastapi_users.get_auth_router(auth_backend),
                    prefix="/auth", tags=["auth"])

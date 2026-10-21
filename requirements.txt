@@ -1,0 +1,5 @@
+fastapi>=0.115,<1
+fastapi-users[sqlalchemy]>=14,<16
+environs>=11,<15
+aiosqlite>=0.20,<1
+uvicorn>=0.30,<1
