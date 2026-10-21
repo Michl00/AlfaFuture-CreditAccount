@@ -13,6 +13,7 @@ from fastapi_users.exceptions import InvalidPasswordException
 
 from config.config import load_config
 from services.db import User, get_user_db
+from services.mail import build_token_url, send_email
 
 config = load_config()
 logger = logging.getLogger(__name__)
@@ -31,12 +32,22 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
 
     async def on_after_forgot_password(self, user: User, token: str,
                                        request: Request | None = None):
-        # TODO: отправить письмо со ссылкой, а не писать токен в лог
+        link = build_token_url(config.mail.reset_password_url, token)
+        await send_email(
+            config.mail, user.email, "Сброс пароля",
+            f"Для сброса пароля перейдите по ссылке:\n{link}\n\n"
+            "Если вы не запрашивали сброс пароля, проигнорируйте это письмо.",
+        )
         logger.info("password reset requested: id=%s", user.id)
 
     async def on_after_request_verify(self, user: User, token: str,
                                       request: Request | None = None):
-        # TODO: отправить письмо со ссылкой
+        link = build_token_url(config.mail.verification_url, token)
+        await send_email(
+            config.mail, user.email, "Подтверждение электронной почты",
+            f"Для подтверждения электронной почты перейдите по ссылке:\n{link}\n\n"
+            "Если вы не регистрировались, проигнорируйте это письмо.",
+        )
         logger.info("verification requested: id=%s", user.id)
 
 
