@@ -1,9 +1,9 @@
 'use strict';
 
-const {products, payment, validInn, validate, decide} = window.CreditFlow;
+const {products, payment, validate, validateRequest, advisor} = window.CreditFlow;
 const $ = id => document.getElementById(id);
 const money = amount => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(amount) + ' ₽';
-const moneyFields = new Set(['amount', 'revenue', 'expenses', 'debt']);
+const moneyFields = new Set(['requestedAmount', 'amount', 'revenue', 'expenses', 'debt']);
 const ungroup = value => String(value).replace(/\s/g, '');
 const groupDigits = value => ungroup(value).replace(/\D/g, '').replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 function formatMoneyInput(input) {
@@ -24,7 +24,7 @@ function formatMoneyInput(input) {
   input.setCustomValidity(invalid ? `Укажите сумму от ${money(Number(input.dataset.min))} до ${money(Number(input.dataset.max))}.` : '');
 }
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
-const statusNames = {draft: 'Черновик', review: 'На рассмотрении', needs_info: 'Нужны уточнения', approved: 'Одобрено', alternative: 'Есть предложение', declined: 'Не одобрено', accepted: 'Условия приняты'};
+const statusNames = {bank_review: 'Ожидает подтверждения банка', draft: 'Черновик', review: 'На рассмотрении', needs_info: 'Нужны уточнения', approved: 'Одобрено', alternative: 'Есть предложение', declined: 'Не одобрено', accepted: 'Условия приняты'};
 const finished = ['declined', 'accepted'];
 let user = null;
 let currentPage = 'home';
@@ -32,6 +32,8 @@ let filter = 'all';
 let draft = null;
 let applications = [];
 let wizardStep = 0;
+let assessmentBusy = false;
+let assessmentTimer;
 let accountMode = 'login';
 let accountBusy = false;
 let detailId = null;
@@ -60,20 +62,27 @@ function persist() {
   $('draft-status').textContent = storageAvailable ? 'Черновик сохранён на этом устройстве' : 'Изменения доступны до закрытия вкладки';
 }
 function loadWorkspace() {
+  clearTimeout(saveTimer);
+  clearTimeout(assessmentTimer);
+  assessmentBusy = false;
   draft = null;
   applications = [];
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey()) || '{}');
-    if (saved.draft && !validate(saved.draft)) draft = saved.draft;
-    // Partial drafts are useful too; validate the schema before using saved values.
-    else if (saved.draft && typeof saved.draft === 'object' && products.some(p => p.id === saved.draft.product)) draft = {...emptyDraft(), ...saved.draft};
-    if (Array.isArray(saved.applications)) applications = saved.applications.filter(item => item && typeof item.id === 'string' && !validate(item) && statusNames[item.status] && item.status !== 'draft' && Number.isFinite(item.createdAt) && Number.isFinite(item.decisionAt)).slice(0, 100);
+    if (saved.draft && typeof saved.draft === 'object' && products.some(p => p.id === saved.draft.product)) {
+      draft = {...emptyDraft(), ...saved.draft};
+      draft.requestedAmount = saved.draft.requestedAmount ?? saved.draft.amount ?? 1500000;
+      draft.requestedMonths = saved.draft.requestedMonths ?? saved.draft.months ?? 24;
+      draft.stage = Number.isInteger(draft.stage) && draft.stage >= 0 && draft.stage <= 3 ? draft.stage : 0;
+      if (draft.stage >= 2 && !draft.selectedOffer) draft.stage = 1;
+      if (draft.stage === 3 && validate(draft)) draft.stage = 2;
+    }
+    if (Array.isArray(saved.applications)) applications = saved.applications.filter(item => item && typeof item.id === 'string' && !validate(item) && Object.hasOwn(statusNames, item.status) && item.status !== 'draft' && Number.isFinite(item.createdAt)).slice(0, 100);
   } catch { notify('Не удалось восстановить сохранённые заявки. Можно начать новую.'); }
-  updateDecisions();
   renderAll();
 }
 function emptyDraft() {
-  return {product: 'working', amount: 1500000, months: 24, company: '', inn: '', revenue: '', expenses: '', debt: 0, age: '', clarification: ''};
+  return {goal: 'working', requestedAmount: 1500000, requestedMonths: 24, selectedOffer: null, stage: 0, product: 'working', amount: 1500000, months: 24, company: '', inn: '', revenue: '', expenses: '', debt: 0, age: '', clarification: ''};
 }
 function navigate(page) {
   currentPage = page;
@@ -129,18 +138,20 @@ function renderAll() {
 function beginApplication(productId, fromCalculator = false) {
   if (resolvingSession) { notify('Подождите, проверяем вход в кабинет.'); return; }
   if (!draft) draft = emptyDraft();
-  if (productId) {
-    const product = products.find(p => p.id === productId);
-    draft.product = product.id;
-    draft.amount = Math.min(Number(draft.amount) || 1500000, product.max);
-    draft.months = Math.min(Number(draft.months) || 24, product.months);
+  if (productId || fromCalculator) {
+    clearTimeout(assessmentTimer);
+    assessmentBusy = false;
+    draft.stage = 0;
+    draft.selectedOffer = null;
+    draft.assessment = null;
   }
+  if (productId) draft.goal = productId;
   if (fromCalculator) {
-    draft.product = Number($('calc-term').value) > 36 ? 'equipment' : 'working';
-    draft.amount = Number(ungroup($('calc-amount').value));
-    draft.months = Number($('calc-term').value);
+    draft.goal = Number($('calc-term').value) > 36 ? 'equipment' : 'working';
+    draft.requestedAmount = Number(ungroup($('calc-amount').value));
+    draft.requestedMonths = Number($('calc-term').value);
   }
-  wizardStep = 0;
+  wizardStep = draft.stage || 0;
   persist();
   renderWizard();
   renderApplications();
@@ -152,27 +163,53 @@ function field(name, label, options = {}) {
   const constraints = monetary ? `inputmode="numeric" data-money data-min="${options.min}" data-max="${options.max}"` : `${options.min !== undefined ? `min="${options.min}"` : ''} ${options.max !== undefined ? `max="${options.max}"` : ''} ${options.step ? `step="${options.step}"` : ''}`;
   return `<div class="field"><label for="app-${name}">${label}</label><input id="app-${name}" name="${name}" value="${value}" type="${monetary ? 'text' : options.type || 'text'}" ${constraints} ${options.maxLength ? `maxlength="${options.maxLength}"` : ''} required>${options.hint ? `<p class="field-hint">${options.hint}</p>` : ''}</div>`;
 }
-function draftPayment() {
-  const product = products.find(p => p.id === draft.product);
-  const monthly = payment(Number(draft.amount), Number(draft.months), product.rate);
-  return Number.isFinite(monthly) && monthly > 0 ? money(monthly) : '—';
-}
 function reviewData(item, amount = Number(item.amount)) {
   const product = products.find(p => p.id === item.product);
-  return `<div class="review-data"><div><span>Цель финансирования</span><strong>${product.short}</strong></div><div><span>Компания</span><strong>${escapeHTML(item.company)}</strong></div><div><span>Сумма</span><strong>${money(amount)}</strong></div><div><span>Срок</span><strong>${item.months} мес.</strong></div><div><span>Ставка в демо-сценарии</span><strong>${String(product.rate).replace('.', ',')}% годовых</strong></div><div><span>Ежемесячный платёж</span><strong>${money(payment(amount, Number(item.months), product.rate))}</strong></div></div>`;
+  const rate = Number(item.rate ?? product.rate);
+  return `<div class="review-data"><div><span>Цель финансирования</span><strong>${product.short}</strong></div><div><span>Компания</span><strong>${escapeHTML(item.company)}</strong></div><div><span>Сумма</span><strong>${money(amount)}</strong></div><div><span>Срок</span><strong>${item.months} мес.</strong></div><div><span>Предварительная ставка</span><strong>${String(rate).replace('.', ',')}% годовых</strong></div><div><span>Ежемесячный платёж</span><strong>${money(payment(amount, Number(item.months), rate))}</strong></div></div>`;
+}
+function comparison(assessment) {
+  const product = products.find(p => p.id === draft.product);
+  const before = [money(Number(draft.amount)), `${draft.months} мес.`, `${String(product.rate).replace('.', ',')}%`, money(payment(Number(draft.amount), Number(draft.months), product.rate))];
+  const after = [money(assessment.terms.amount), `${assessment.terms.months} мес.`, `${String(assessment.terms.rate).replace('.', ',')}%`, money(assessment.terms.payment)];
+  return `<div class="terms-comparison"><div class="comparison-row comparison-head"><span>Параметр</span><span>Вы выбрали</span><span>К согласованию</span></div>${['Сумма', 'Срок', 'Ставка', 'Платёж в месяц'].map((label, index) => `<div class="comparison-row"><span>${label}</span><span>${before[index]}</span><strong class="${before[index] !== after[index] ? 'changed' : ''}">${after[index]}</strong></div>`).join('')}</div>`;
+}
+function offerCards() {
+  return advisor.recommend(draft).map(offer => {
+    const product = products.find(p => p.id === offer.product);
+    const selected = draft.selectedOffer === offer.product;
+    return `<article class="offer-card ${selected ? 'selected' : ''}"><div class="section-heading"><h3>${product.name}</h3>${offer.recommended ? '<span class="offer-tag">Под вашу цель</span>' : ''}</div><p class="muted">${offer.reason}</p><div class="offer-facts"><strong>${money(offer.amount)}<small>на ${offer.months} мес.</small></strong><strong>${money(offer.payment)}<small>в месяц · ${String(offer.rate).replace('.', ',')}%</small></strong></div>${offer.limited ? '<p class="field-hint">Сумма или срок ограничены условиями этого варианта.</p>' : ''}<button type="button" class="button ${selected ? 'primary' : 'secondary'} full" data-offer="${offer.product}" aria-pressed="${selected}">${selected ? 'Выбрано ✓' : 'Выбрать вариант →'}</button></article>`;
+  }).join('');
 }
 function renderWizard() {
   $('application-error').hidden = true;
-  $('wizard-progress').innerHTML = ['1. Ваши планы', '2. О бизнесе', '3. Проверка'].map((label, index) => `<span class="${index <= wizardStep ? 'active' : ''}" ${index === wizardStep ? 'aria-current="step"' : ''}>${label}</span>`).join('');
+  $('wizard-progress').innerHTML = ['1. Ваши планы', '2. Варианты', '3. О компании', '4. Согласование'].map((label, index) => `<span class="${index <= wizardStep ? 'active' : ''}" ${index === wizardStep ? 'aria-current="step"' : ''}>${label}</span>`).join('');
   $('wizard-back').hidden = wizardStep === 0;
-  $('wizard-next').innerHTML = wizardStep === 2 ? 'Отправить заявку <span>→</span>' : 'Продолжить <span>→</span>';
-  const product = products.find(p => p.id === draft.product);
+  $('wizard-back').disabled = assessmentBusy;
+  $('wizard-next').disabled = assessmentBusy;
+  $('wizard-next').innerHTML = wizardStep === 0 ? 'Подобрать варианты <span>→</span>' : wizardStep === 2 ? 'Оценить условия <span>→</span>' : wizardStep === 3 ? 'Согласовать и отправить в банк <span>→</span>' : 'Продолжить <span>→</span>';
   if (wizardStep === 0) {
-    $('wizard-fields').innerHTML = `<div class="field"><label for="app-product">Для чего нужны деньги?</label><select id="app-product" name="product">${products.map(p => `<option value="${p.id}" ${p.id === draft.product ? 'selected' : ''}>${p.name}</option>`).join('')}</select></div><div class="form-grid">${field('amount', 'Сумма, ₽', {type: 'number', min: 100000, max: product.max, step: 10000})}${field('months', 'Срок, месяцев', {type: 'number', min: 6, max: product.months, step: 1})}</div><div class="wizard-summary"><span>Примерный платёж в месяц</span><strong id="wizard-payment">${draftPayment()}</strong></div><p class="small-note">Расчёт предварительный. Условия используются только в учебном прототипе.</p>`;
+    $('wizard-fields').innerHTML = `<div class="field"><label for="app-goal">Для чего нужны деньги?</label><select id="app-goal" name="goal">${products.map(p => `<option value="${p.id}" ${p.id === draft.goal ? 'selected' : ''}>${p.name}</option>`).join('')}</select></div><div class="form-grid">${field('requestedAmount', 'Сколько нужно, ₽', {min: 100000, max: 10000000})}${field('requestedMonths', 'На какой срок, месяцев', {type: 'number', min: 6, max: 60, step: 1})}</div><p class="muted">Сначала подберём варианты под ваши планы. Сведения о компании понадобятся после выбора.</p>`;
   } else if (wizardStep === 1) {
-    $('wizard-fields').innerHTML = `<div class="section-heading"><p class="muted">Несколько деталей, чтобы подобрать посильные условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div><div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {type: 'number', min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {type: 'number', min: 0, max: 1000000000})}${field('debt', 'Платежи по действующим кредитам, ₽/мес.', {type: 'number', min: 0, max: 1000000000})}${field('age', 'Сколько месяцев работает бизнес?', {type: 'number', min: 0, max: 1200, step: 1})}</div><p class="field-hint">Для демонстрации используйте вымышленные данные. Проверки по реестрам не выполняются.</p>`;
+    $('wizard-fields').innerHTML = `<p class="muted">Варианты под запрос ${money(Number(draft.requestedAmount))} на ${draft.requestedMonths} мес. Выберите один, чтобы продолжить.</p><div class="offers-list">${offerCards()}</div><p class="small-note">Предварительные условия. После оценки бизнеса они могут измениться.</p>`;
+  } else if (wizardStep === 2) {
+    const product = products.find(p => p.id === draft.product);
+    $('wizard-fields').innerHTML = `<div class="info-banner"><p>Выбрано: <strong>${product.name}</strong> · ${money(Number(draft.amount))} на ${draft.months} мес.</p></div><div class="section-heading"><p class="muted">Расскажите о компании, чтобы оценить условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div><div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {min: 0, max: 1000000000})}${field('debt', 'Платежи по кредитам, ₽/мес.', {min: 0, max: 1000000000})}${field('age', 'Возраст бизнеса, месяцев', {type: 'number', min: 0, max: 1200, step: 1})}</div><p class="field-hint">Используйте вымышленные данные. Оценка пока демонстрационная.</p>`;
+  } else if (assessmentBusy) {
+    $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем посильные условия</h3><p>Учитываем доходы, расходы и действующие обязательства компании.</p></div>';
   } else {
-    $('wizard-fields').innerHTML = `${reviewData(draft)}<label class="checkbox-label"><input name="consent" type="checkbox" required><span>Данные проверены. Я понимаю, что отправляю демонстрационную заявку, которая сохранится только в этом браузере.</span></label>`;
+    const assessment = advisor.assess(draft);
+    draft.assessment = assessment;
+    const reasons = `<ul class="assessment-reasons">${assessment.reasons.map(reason => `<li>${escapeHTML(reason)}</li>`).join('')}</ul>`;
+    if (assessment.status === 'needs_info') {
+      $('wizard-fields').innerHTML = `<h3>Нужно немного больше информации</h3>${reasons}<div class="field"><label for="app-clarification">Расскажите о договорах и источниках выручки</label><textarea id="app-clarification" name="clarification" minlength="20" maxlength="2000" required>${escapeHTML(draft.clarification)}</textarea></div>`;
+      $('wizard-next').innerHTML = 'Продолжить оценку <span>→</span>';
+    } else if (assessment.status === 'unavailable') {
+      $('wizard-fields').innerHTML = `<h3>Пока не получается подобрать условия</h3>${reasons}<p class="muted">Это предварительная оценка, а не решение банка. Заявка не отправлена.</p>`;
+      $('wizard-next').innerHTML = 'Изменить параметры <span>→</span>';
+    } else {
+      $('wizard-fields').innerHTML = `<div class="section-heading"><h3>Ваши условия к согласованию</h3><span class="offer-tag">Предварительная оценка</span></div>${comparison(assessment)}${reasons}<div class="info-banner"><p>Банк ещё не получил заявку и не принимал решение. Проверьте изменения и подтвердите согласие на отправку.</p></div><label class="checkbox-label"><input name="consent" type="checkbox" required><span>Согласен с указанными выше суммой, сроком, ставкой и платежом и хочу отправить заявку на подтверждение в банк.</span></label>`;
+    }
   }
   $('draft-status').textContent = storageAvailable ? 'Черновик сохранён на этом устройстве' : 'Изменения доступны до закрытия вкладки';
 }
@@ -180,105 +217,97 @@ function captureDraft() {
   if (!draft) return;
   for (const [key, value] of new FormData($('application-form'))) if (key !== 'consent') draft[key] = moneyFields.has(key) ? ungroup(value) : value;
 }
+function wizardError(message) {
+  $('application-error').textContent = message;
+  $('application-error').hidden = false;
+}
+function moveToStep(step) {
+  wizardStep = step;
+  draft.stage = step;
+  persist();
+  renderWizard();
+}
+function runAssessment() {
+  clearTimeout(saveTimer);
+  assessmentBusy = true;
+  draft.stage = 3;
+  wizardStep = 3;
+  persist();
+  renderWizard();
+  const snapshot = draft;
+  assessmentTimer = setTimeout(() => {
+    if (draft !== snapshot) return;
+    assessmentBusy = false;
+    draft.assessment = advisor.assess(draft);
+    persist();
+    if ($('application-dialog').open) renderWizard();
+  }, 800);
+}
 $('application-form').addEventListener('input', event => {
   if (event.target.hasAttribute('data-money')) formatMoneyInput(event.target);
   captureDraft();
+  if (wizardStep < 3) draft.assessment = null;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(persist, 250);
-  if (wizardStep === 0) {
-    if (event.target.name === 'product') {
-      const product = products.find(p => p.id === draft.product);
-      $('app-amount').dataset.max = product.max;
-      formatMoneyInput($('app-amount'));
-      $('app-months').max = product.months;
-    }
-    $('wizard-payment').textContent = draftPayment();
-  }
 });
 $('application-form').addEventListener('submit', event => {
   event.preventDefault();
+  if (assessmentBusy || !draft) return;
   captureDraft();
-  let error = null;
   if (wizardStep === 0) {
-    const product = products.find(p => p.id === draft.product);
-    if (Number(draft.amount) < 100000 || Number(draft.amount) > product.max || Number(draft.months) < 6 || Number(draft.months) > product.months || !Number.isInteger(Number(draft.months))) error = 'Проверьте сумму и срок для выбранной цели.';
-  } else error = validate(draft);
-  if (error) {
-    $('application-error').textContent = error;
-    $('application-error').hidden = false;
-    return;
-  }
-  if (wizardStep < 2) {
-    wizardStep += 1;
+    const error = validateRequest(draft);
+    if (error) return wizardError(error);
+    draft.selectedOffer = null;
+    draft.assessment = null;
+    moveToStep(1);
+  } else if (wizardStep === 1) {
+    const offer = advisor.recommend(draft).find(item => item.product === draft.selectedOffer);
+    if (!offer) return wizardError('Выберите один из предложенных вариантов.');
+    Object.assign(draft, {product: offer.product, amount: offer.amount, months: offer.months});
+    moveToStep(2);
+  } else if (wizardStep === 2) {
+    const error = validate(draft);
+    if (error) return wizardError(error);
+    runAssessment();
+  } else {
+    const error = validate(draft);
+    if (error) return wizardError(error);
+    const assessment = advisor.assess(draft);
+    if (assessment.status === 'unavailable') {moveToStep(0); return;}
+    if (assessment.status === 'needs_info') return wizardError('Добавьте описание доходов и договоров — минимум 20 символов.');
+    // Clarifications need a fresh assessment and a separate consent, never implicit submission.
+    if (!$('application-form').querySelector('[name="consent"]')) {runAssessment(); return;}
+    if (!new FormData($('application-form')).get('consent')) return;
+    clearTimeout(saveTimer);
+    const createdAt = Date.now();
+    const item = {...draft, ...assessment.terms, assessment, selectedTerms: {amount: Number(draft.amount), months: Number(draft.months), rate: products.find(p => p.id === draft.product).rate}, flowVersion: 2, id: `${createdAt.toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`, status: 'bank_review', createdAt, agreedAt: createdAt};
+    applications.unshift(item);
+    applications.splice(100);
+    draft = null;
     persist();
-    renderWizard();
-    $('wizard-fields').querySelector('input, select')?.focus();
-    return;
-  }
-  if (!new FormData($('application-form')).get('consent')) return;
-  clearTimeout(saveTimer);
-  const createdAt = Date.now();
-  const item = {...draft, id: `${createdAt.toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`, status: 'review', createdAt, decisionAt: createdAt + 6000};
-  applications.unshift(item);
-  applications.splice(100);
-  draft = null;
-  persist();
-  closeDialog('application-dialog');
-  navigate('applications');
-  renderApplications();
-  openDetail(item.id);
-  notify('Заявка принята. Решение скоро появится в кабинете.');
-});
-$('wizard-back').addEventListener('click', () => {captureDraft(); persist(); wizardStep = Math.max(0, wizardStep - 1); renderWizard();});
-
-function updateDecisions() {
-  let changed = false;
-  for (const item of applications) {
-    if (item.status === 'review' && Date.now() >= item.decisionAt) {
-      Object.assign(item, decide(item));
-      changed = true;
-    }
-  }
-  if (changed) {
-    persist();
+    closeDialog('application-dialog');
     renderApplications();
-    if ($('detail-dialog').open) renderDetail();
+    navigate('profile');
+    notify('Условия согласованы. Демо-заявка ожидает подтверждения банка и доступна в профиле.');
   }
-}
+});
+$('wizard-back').addEventListener('click', () => {
+  if (assessmentBusy) return;
+  captureDraft();
+  draft.assessment = null;
+  moveToStep(Math.max(0, wizardStep - 1));
+});
 function openDetail(id) { detailId = id; renderDetail(); showDialog('detail-dialog'); }
 function renderDetail() {
   const item = applications.find(a => a.id === detailId);
   if (!item) return;
-  const messages = {
-    review: 'Заявка принята. Пока можно вернуться к делам — статус обновится здесь автоматически.',
-    needs_info: 'Ваш бизнес работает меньше полугода. Расскажите об источниках выручки и планах, чтобы мы могли продолжить рассмотрение.',
-    approved: 'Для вашей заявки подобраны условия. Проверьте сумму, срок и платёж. Если всё подходит, примите предложение.',
-    alternative: 'На запрошенную сумму пока не получается подобрать посильный платёж. Есть предложение на меньшую сумму — ознакомьтесь с условиями ниже.',
-    declined: 'Сейчас не удалось подобрать финансирование: свободного дохода недостаточно для платежей. Вы можете пересмотреть расходы или сумму и подать новую заявку.',
-    accepted: 'Условия приняты. Демонстрационный сценарий завершён. Реальный договор не заключён, денежные средства не переводились.',
-  };
   $('detail-title').textContent = `Заявка № ${item.id}`;
-  const amount = ['approved', 'alternative', 'accepted'].includes(item.status) ? item.offeredAmount : Number(item.amount);
-  $('detail-content').innerHTML = `<span class="status ${item.status}">${statusNames[item.status]}</span><p class="detail-intro">${messages[item.status]}</p><div class="timeline"><div class="done">Заявка отправлена</div><div class="${item.status === 'review' || item.status === 'needs_info' ? 'current' : 'done'}">${item.status === 'needs_info' ? 'Нужны уточнения' : 'Рассмотрение'}</div><div class="${['review', 'needs_info'].includes(item.status) ? '' : 'done'}">${item.status === 'accepted' ? 'Условия приняты' : 'Решение'}</div></div>${reviewData(item, amount)}${item.status === 'alternative' ? `<p class="field-hint">Вы запрашивали ${money(Number(item.amount))}. Выше показаны предлагаемые условия.</p>` : ''}<div class="detail-actions">${['approved', 'alternative'].includes(item.status) ? '<button class="button primary" data-action="accept">Принять демо-условия <span>→</span></button><p class="field-hint">Это действие не создаёт финансовых обязательств.</p>' : ''}${item.status === 'needs_info' ? '<form id="clarification-form"><div class="field"><label for="clarification">Расскажите о доходах и планах бизнеса</label><textarea id="clarification" name="clarification" required minlength="20" maxlength="2000" placeholder="Например, какие договоры уже заключены и откуда поступает выручка"></textarea></div><button class="button primary" type="submit">Отправить уточнение <span>→</span></button></form>' : ''}${item.status === 'declined' ? '<button class="button secondary" data-action="reapply">Подать новую заявку <span>→</span></button>' : ''}</div>`;
+  const current = item.status === 'bank_review';
+  $('detail-content').innerHTML = `<span class="status ${item.status}">${statusNames[item.status]}</span><p class="detail-intro">${current ? 'Вы согласовали условия. Заявка направлена на подтверждение банка. До его решения условия остаются предварительными.' : 'Эта заявка сохранена в предыдущем демонстрационном сценарии. Её статус не является подтверждением банка.'}</p><div class="timeline"><div class="done">Вариант выбран</div><div class="done">Условия согласованы</div><div class="${current ? 'current' : ''}">Подтверждение банка</div></div>${reviewData(item)}${current ? `<p class="field-hint">Согласовано ${new Date(item.agreedAt).toLocaleString('ru-RU')}.</p><div class="info-banner"><p>Отправка в банк пока моделируется. Реальный банк не подключён, автоматического одобрения нет.</p></div>` : ''}`;
 }
-$('detail-content').addEventListener('submit', event => {
-  if (event.target.id !== 'clarification-form') return;
-  event.preventDefault();
-  const text = new FormData(event.target).get('clarification').trim();
-  if (text.length < 20) return;
-  const item = applications.find(a => a.id === detailId);
-  item.clarification = text;
-  item.status = 'review';
-  item.decisionAt = Date.now() + 6000;
-  persist(); renderApplications(); renderDetail();
-});
-
 function renderProfile() {
-  if (!user) {
-    $('profile-content').innerHTML = '<div class="card profile-card"><h2>Рады знакомству</h2><p class="muted">Войдите или создайте аккаунт, чтобы управлять данными профиля. Демо-заявку можно пройти без регистрации.</p><button class="button primary" data-action="login">Войти</button><button class="button secondary" data-action="register">Создать аккаунт</button></div>';
-    return;
-  }
-  $('profile-content').innerHTML = `<div class="card profile-card"><h2>${escapeHTML(user.username)}</h2><div class="profile-data"><span>Электронная почта</span><strong>${escapeHTML(user.email)}</strong></div><div class="profile-data"><span>Почта подтверждена</span><strong>${user.is_verified ? 'Да' : 'Пока нет'}</strong></div><button class="button secondary" data-action="edit-profile">Изменить имя</button>${!user.is_verified ? '<button class="button secondary" data-action="request-verify">Подтвердить почту</button>' : ''}<button class="text-button" data-action="logout">Выйти из кабинета</button></div><div class="info-banner"><span>i</span><p>Демонстрационные заявки привязаны к этому аккаунту на текущем устройстве. При входе с другого устройства они не появятся.</p></div>`;
+  const account = !user ? '<div class="card profile-card"><h2>Рады знакомству</h2><p class="muted">Войдите или создайте аккаунт для работы с профилем. Демо-заявки гостя сохраняются отдельно на этом устройстве.</p><button class="button primary" data-action="login">Войти</button><button class="button secondary" data-action="register">Создать аккаунт</button></div>' : `<div class="card profile-card"><h2>${escapeHTML(user.username)}</h2><div class="profile-data"><span>Электронная почта</span><strong>${escapeHTML(user.email)}</strong></div><div class="profile-data"><span>Почта подтверждена</span><strong>${user.is_verified ? 'Да' : 'Пока нет'}</strong></div><button class="button secondary" data-action="edit-profile">Изменить имя</button>${!user.is_verified ? '<button class="button secondary" data-action="request-verify">Подтвердить почту</button>' : ''}<button class="text-button" data-action="logout">Выйти из кабинета</button></div>`;
+  $('profile-content').innerHTML = `${account}<section class="section"><div class="section-heading"><h2>Заявки на подтверждении <span class="inline-count">${applications.filter(item => item.status === 'bank_review').length}</span></h2></div><div id="profile-applications">${applications.map(applicationCard).join('') || emptyApplications()}</div></section><div class="info-banner"><p>Демонстрационные заявки сохраняются на этом устройстве отдельно для каждого аккаунта и гостя.</p></div>`;
 }
 const accountFields = {
   email: {label: 'Электронная почта', type: 'email', autocomplete: 'email'},
@@ -409,6 +438,11 @@ document.addEventListener('click', event => {
   }
   if (button.dataset.page) navigate(button.dataset.page);
   if (button.dataset.product) beginApplication(button.dataset.product);
+  if (button.dataset.offer && draft && wizardStep === 1) {
+    draft.selectedOffer = button.dataset.offer;
+    persist();
+    renderWizard();
+  }
   if (button.dataset.detail) openDetail(button.dataset.detail);
   if (button.dataset.filter) {
     filter = button.dataset.filter;
@@ -433,11 +467,7 @@ document.addEventListener('click', event => {
     Object.assign(draft, {company: 'ООО «Вектор»', inn: '7701234560', revenue: 1200000, expenses: 700000, debt: 20000, age: 24});
     persist(); renderWizard();
   }
-  if (action === 'accept') {
-    const item = applications.find(a => a.id === detailId);
-    if (item && ['approved', 'alternative'].includes(item.status)) {item.status = 'accepted'; persist(); renderApplications(); renderDetail(); notify('Демо-условия приняты. Денежные операции не выполнялись.');}
-  }
-  if (action === 'reapply') {closeDialog('detail-dialog'); beginApplication(applications.find(a => a.id === detailId).product);}
+
 });
 $('application-dialog').addEventListener('cancel', () => {captureDraft(); clearTimeout(saveTimer); persist(); renderApplications();});
 $('account-dialog').addEventListener('close', () => {
@@ -464,4 +494,3 @@ if (flow === 'reset' || flow === 'verify') {
   catch { notify('Сервис профиля временно недоступен. Демонстрационные заявки доступны без входа.'); }
   finally { resolvingSession = false; loadWorkspace(); }
 })();
-setInterval(updateDecisions, 1000);

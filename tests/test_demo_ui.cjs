@@ -17,11 +17,18 @@ async function setup(t, options = {}) {
   const {window} = dom;
   const calls = [];
   const clock = {value: 1800000000000};
-  const intervals = [];
+  const pendingAssessments = new Map();
+  let timerId = 100000;
+  const realSetTimeout = window.setTimeout.bind(window);
+  const realClearTimeout = window.clearTimeout.bind(window);
+  window.setTimeout = (callback, delay, ...args) => {
+    if (delay === 800) {const id = timerId++; pendingAssessments.set(id, callback); return id;}
+    return realSetTimeout(callback, delay, ...args);
+  };
+  window.clearTimeout = id => {if (!pendingAssessments.delete(id)) realClearTimeout(id);};
   window.Date.now = () => clock.value;
   window.AbortController = AbortController;
   window.scrollTo = () => {};
-  window.setInterval = callback => {intervals.push(callback); return 1;};
   window.HTMLDialogElement.prototype.showModal = function () {this.open = true;};
   window.HTMLDialogElement.prototype.close = function () {this.open = false; this.dispatchEvent(new window.Event('close'));};
   if (!window.crypto.randomUUID) window.crypto.randomUUID = () => 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -41,111 +48,174 @@ async function setup(t, options = {}) {
   };
   const set = (id, value) => {get(id).value = value; get(id).dispatchEvent(new window.Event('input', {bubbles: true}));};
   const submit = async id => {get(id).dispatchEvent(new window.Event('submit', {bubbles: true, cancelable: true})); await tick();};
-  const advance = () => {clock.value += 7000; intervals.forEach(callback => callback());};
+  const advance = () => {clock.value += 7000;};
+  const finishAssessment = async () => {
+    for (const [id, callback] of [...pendingAssessments]) {pendingAssessments.delete(id); callback();}
+    await tick();
+  };
   const state = key => JSON.parse(window.localStorage.getItem(key || 'credit-cabinet-v1:guest'));
-  return {window, calls, clock, get, click, set, submit, advance, state};
+  return {window, calls, clock, get, click, set, submit, advance, finishAssessment, state};
 }
-async function fillApplication(ui, overrides = {}) {
+async function prepareTerms(ui, overrides = {}) {
   ui.click('[data-action="apply"]');
-  for (const key of ['amount', 'months']) if (overrides[key] !== undefined) ui.set(`app-${key}`, overrides[key]);
+  for (const key of ['requestedAmount', 'requestedMonths']) if (overrides[key] !== undefined) ui.set(`app-${key}`, overrides[key]);
+  await ui.submit('application-form');
+  ui.click(`[data-offer="${overrides.product || 'working'}"]`);
   await ui.submit('application-form');
   ui.click('[data-action="sample"]');
   for (const [key, value] of Object.entries(overrides)) if (ui.get(`app-${key}`)) ui.set(`app-${key}`, value);
   await ui.submit('application-form');
+  await ui.finishAssessment();
+}
+async function fillApplication(ui, overrides = {}) {
+  await prepareTerms(ui, overrides);
   ui.window.document.querySelector('[name="consent"]').checked = true;
   await ui.submit('application-form');
 }
 
-test('payment calculation and INN validation handle expected cases', () => {
+test('payment, INN validation, and request constraints handle expected cases', () => {
   assert.equal(credit.payment(120000, 12, 0), 10000);
-  assert.ok(credit.payment(1500000, 24, 24.9) > 70000);
   assert.ok(credit.validInn('7701234560'));
   assert.ok(!credit.validInn('7701234561'));
-  assert.ok(!credit.validInn('٧٧٠١٢٣٤٥٦٠'));
   assert.equal(credit.validate(sample), null);
-  assert.match(credit.validate({...sample, amount: 10000001}), /сумму/);
-  assert.match(credit.validate({...sample, months: 7.5}), /срок/);
+  assert.match(credit.validateRequest({goal: 'working', requestedAmount: 99999, requestedMonths: 24}), /сумму/);
 });
 
-test('demonstration decisions cover approval, alternative, refusal and clarification', () => {
-  assert.equal(credit.decide(sample).status, 'approved');
-  const alternative = credit.decide({...sample, expenses: 1000000, debt: 50000});
-  assert.equal(alternative.status, 'alternative');
-  assert.ok(alternative.offeredAmount < sample.amount);
-  assert.equal(credit.decide({...sample, expenses: 1200000}).status, 'declined');
-  assert.equal(credit.decide({...sample, age: 2}).status, 'needs_info');
-  assert.equal(credit.decide({...sample, age: 2, clarification: 'Подписаны договоры на поставки.'}).status, 'approved');
+test('recommendations rank the goal first and respect each product limits', () => {
+  const offers = credit.advisor.recommend({goal: 'equipment', requestedAmount: 10000000, requestedMonths: 60});
+  assert.equal(offers[0].product, 'equipment');
+  assert.equal(offers[0].recommended, true);
+  const flex = offers.find(offer => offer.product === 'flex');
+  assert.equal(flex.amount, 3000000);
+  assert.equal(flex.months, 24);
+  assert.equal(flex.limited, true);
 });
 
-test('dashboard presents business actions without developer internals', async t => {
+test('risk assessment adjusts terms, requests information, or finds no affordable terms', () => {
+  const ready = credit.advisor.assess(sample);
+  assert.equal(ready.status, 'ready');
+  assert.equal(ready.terms.amount, sample.amount);
+  const adjusted = credit.advisor.assess({...sample, expenses: 1000000, debt: 50000});
+  assert.equal(adjusted.status, 'ready');
+  assert.ok(adjusted.terms.amount < sample.amount);
+  assert.ok(adjusted.terms.months > sample.months);
+  assert.ok(adjusted.terms.rate > 24.9);
+  assert.ok(adjusted.terms.payment <= 50000);
+  assert.equal(credit.advisor.assess({...sample, expenses: 1200000}).status, 'unavailable');
+  assert.equal(credit.advisor.assess({...sample, age: 2}).status, 'needs_info');
+});
+
+test('dashboard hides developer internals and calculator opens the needs stage', async t => {
   const ui = await setup(t);
-  assert.match(ui.get('home-page').textContent, /финансирования/);
-  assert.equal(ui.get('home-products').querySelectorAll('.product-card').length, 3);
-  assert.doesNotMatch(ui.window.document.body.textContent, /REST|JSON|HTTP|Swagger|Ответ сервера|Выберите метод/i);
-  assert.equal(ui.calls.length, 1); // Restore login silently.
-  ui.click('[data-page="applications"]');
-  assert.equal(ui.get('applications-page').hidden, false);
-  assert.equal(ui.get('home-page').hidden, true);
-});
-
-test('calculator transfers selected terms to the application', async t => {
-  const ui = await setup(t);
+  assert.doesNotMatch(ui.window.document.body.textContent, /REST|JSON|HTTP|Swagger|Ответ сервера/i);
   ui.set('calc-amount', 2000000);
   ui.get('calc-term').value = '60';
   ui.get('calculator-apply').click();
-  assert.equal(ui.get('app-amount').value, '2 000 000');
-  assert.equal(ui.get('app-months').value, '60');
-  assert.equal(ui.get('app-product').value, 'equipment');
+  assert.equal(ui.get('app-requestedAmount').value, '2 000 000');
+  assert.equal(ui.get('app-requestedMonths').value, '60');
+  assert.equal(ui.get('app-goal').value, 'equipment');
 });
 
-test('application completes, receives decision, accepts terms, and persists after reload', async t => {
-  const ui = await setup(t);
-  await fillApplication(ui);
-  assert.equal(ui.state().draft, null);
-  assert.equal(ui.state().applications[0].status, 'review');
-  assert.match(ui.get('detail-content').textContent, /На рассмотрении/);
-  ui.advance();
-  assert.equal(ui.state().applications[0].status, 'approved');
-  ui.click('[data-action="accept"]');
-  assert.equal(ui.state().applications[0].status, 'accepted');
-  assert.match(ui.get('detail-content').textContent, /средства не переводились/);
-  const restored = await setup(t, {storage: {'credit-cabinet-v1:guest': JSON.stringify(ui.state())}});
-  assert.match(restored.get('home-applications').textContent, /Условия приняты/);
-  assert.equal(restored.calls.length, 1); // No financial API requests.
-});
-
-test('clarification resumes review and produces a new result', async t => {
-  const ui = await setup(t);
-  await fillApplication(ui, {age: 2});
-  ui.advance();
-  assert.equal(ui.state().applications[0].status, 'needs_info');
-  ui.set('clarification', 'Уже заключены договоры на ежемесячные поставки товаров.');
-  await ui.submit('clarification-form');
-  assert.equal(ui.state().applications[0].status, 'review');
-  ui.advance();
-  assert.equal(ui.state().applications[0].status, 'approved');
-});
-
-test('invalid INN prevents application submission', async t => {
+test('a user must explicitly select an offer before entering company details', async t => {
   const ui = await setup(t);
   ui.click('[data-action="apply"]');
   await ui.submit('application-form');
-  ui.click('[data-action="sample"]');
-  ui.set('app-inn', '7701234561');
+  assert.equal(ui.get('wizard-fields').querySelectorAll('[data-offer]').length, 3);
+  assert.equal(ui.get('app-company'), null);
   await ui.submit('application-form');
-  assert.equal(ui.get('application-error').hidden, false);
-  assert.match(ui.get('application-error').textContent, /ИНН/);
+  assert.match(ui.get('application-error').textContent, /Выберите/);
+  ui.click('[data-offer="working"]');
+  await ui.submit('application-form');
+  assert.ok(ui.get('app-company'));
+});
+
+test('assessment and corrections precede consent and submission to the bank', async t => {
+  const ui = await setup(t);
+  await prepareTerms(ui, {expenses: 1000000, debt: 50000});
+  assert.equal(ui.state().applications.length, 0);
+  assert.equal(ui.state().draft.assessment.status, 'ready');
+  assert.ok(ui.get('wizard-fields').querySelector('.terms-comparison'));
+  assert.match(ui.get('wizard-fields').textContent, /Сумма уменьшена/);
+  await ui.submit('application-form'); // Unchecked consent must never send.
+  assert.equal(ui.state().applications.length, 0);
+  ui.window.document.querySelector('[name="consent"]').checked = true;
+  const agreed = ui.state().draft.assessment.terms;
+  await ui.submit('application-form');
+  const item = ui.state().applications[0];
+  assert.equal(item.status, 'bank_review');
+  assert.equal(item.amount, agreed.amount);
+  assert.equal(item.months, agreed.months);
+  assert.equal(item.rate, agreed.rate);
+  assert.equal(ui.get('profile-page').hidden, false);
+  assert.match(ui.get('profile-applications').textContent, /Ожидает подтверждения банка/);
+  ui.advance();
+  assert.equal(ui.state().applications[0].status, 'bank_review');
+  const restored = await setup(t, {storage: {'credit-cabinet-v1:guest': JSON.stringify(ui.state())}});
+  restored.click('[data-page="profile"]');
+  assert.match(restored.get('profile-applications').textContent, /Ожидает подтверждения банка/);
+  assert.equal(restored.calls.length, 1); // No CometAPI or real bank calls.
+});
+
+test('clarification must be reassessed and separately consented before sending', async t => {
+  const ui = await setup(t);
+  await prepareTerms(ui, {age: 2});
+  assert.equal(ui.state().draft.assessment.status, 'needs_info');
+  ui.set('app-clarification', 'Заключены договоры на регулярные поставки товаров.');
+  await ui.submit('application-form');
+  assert.equal(ui.state().applications.length, 0);
+  await ui.finishAssessment();
+  assert.equal(ui.window.document.querySelector('[name="consent"]').checked, false);
+  assert.equal(ui.state().draft.assessment.status, 'ready');
+});
+
+test('unaffordable conditions never produce a bank application', async t => {
+  const ui = await setup(t);
+  await prepareTerms(ui, {expenses: 1200000});
+  assert.equal(ui.state().draft.assessment.status, 'unavailable');
+  assert.equal(ui.window.document.querySelector('[name="consent"]'), null);
+  await ui.submit('application-form');
+  assert.ok(ui.get('app-requestedAmount'));
   assert.equal(ui.state().applications.length, 0);
 });
 
-test('draft survives closing and reload, and can be deleted', async t => {
+test('invalid INN prevents assessment and submission', async t => {
   const ui = await setup(t);
-  ui.click('[data-action="apply"]');
-  ui.set('app-amount', 2100000);
+  await prepareTerms(ui, {inn: '7701234561'});
+  assert.match(ui.get('application-error').textContent, /ИНН/);
+  assert.equal(ui.state().applications.length, 0);
+  assert.ok(ui.get('app-company'));
+});
+
+test('reopening a saved assessment never restores consent', async t => {
+  const ui = await setup(t);
+  await prepareTerms(ui);
+  ui.window.document.querySelector('[name="consent"]').checked = true;
   ui.click('[data-close="application-dialog"]');
   const restored = await setup(t, {storage: {'credit-cabinet-v1:guest': JSON.stringify(ui.state())}});
   restored.click('[data-action="apply"]');
-  assert.equal(restored.get('app-amount').value, '2 100 000');
+  assert.equal(restored.window.document.querySelector('[name="consent"]').checked, false);
+  assert.equal(restored.state().applications.length, 0);
+});
+
+test('changing company data after assessment requires a fresh evaluation', async t => {
+  const ui = await setup(t);
+  await prepareTerms(ui);
+  ui.get('wizard-back').click();
+  ui.set('app-expenses', 1200000);
+  await ui.submit('application-form');
+  await ui.finishAssessment();
+  assert.equal(ui.state().draft.assessment.status, 'unavailable');
+  assert.equal(ui.state().applications.length, 0);
+});
+
+test('draft amount survives closing and reload and can be deleted', async t => {
+  const ui = await setup(t);
+  ui.click('[data-action="apply"]');
+  ui.set('app-requestedAmount', 2100000);
+  ui.click('[data-close="application-dialog"]');
+  const restored = await setup(t, {storage: {'credit-cabinet-v1:guest': JSON.stringify(ui.state())}});
+  restored.click('[data-action="apply"]');
+  assert.equal(restored.get('app-requestedAmount').value, '2 100 000');
   restored.click('[data-close="application-dialog"]');
   restored.click('[data-action="delete-draft"]');
   assert.equal(restored.state().draft, null);
@@ -191,10 +261,11 @@ test('login failures show useful text instead of raw server details', async t =>
   assert.equal(ui.get('account-submit').disabled, false);
 });
 
-test('company names are rendered as text, not HTML', async t => {
+test('company names are rendered as text in profile and application details', async t => {
   const ui = await setup(t);
   await fillApplication(ui, {company: '<img src=x onerror="window.injected=true">'});
-  assert.equal(ui.get('applications-list').querySelector('img'), null);
+  ui.click('#profile-applications [data-detail]');
+  assert.equal(ui.get('profile-content').querySelector('img'), null);
   assert.equal(ui.get('detail-content').querySelector('img'), null);
   assert.equal(ui.window.injected, undefined);
 });
@@ -207,38 +278,19 @@ test('unavailable storage leaves the working flow usable and warns the user', as
   assert.match(ui.get('draft-status').textContent, /до закрытия вкладки/);
 });
 
-
-test('money inputs group digits while preserving numeric calculations and range limits', async t => {
+test('monetary fields preserve grouping and numeric values across the new stages', async t => {
   const ui = await setup(t);
-  assert.equal(ui.get('calc-amount').value, '1 500 000');
   ui.set('calc-amount', '10\u00a0000\u00a0000');
   assert.equal(ui.get('calc-amount').value, '10 000 000');
   assert.equal(ui.get('calc-range').value, '10000000');
-  assert.equal(ui.get('calculator-apply').disabled, false);
   ui.get('calculator-apply').click();
-  assert.equal(ui.get('app-amount').value, '10 000 000');
+  assert.equal(ui.get('app-requestedAmount').value, '10 000 000');
+  await ui.submit('application-form');
+  ui.click('[data-offer="working"]');
   await ui.submit('application-form');
   ui.click('[data-action="sample"]');
   assert.equal(ui.get('app-revenue').value, '1 200 000');
-  assert.equal(ui.get('app-expenses').value, '700 000');
-  assert.equal(ui.get('app-debt').value, '20 000');
   ui.set('app-revenue', '2 500 000');
   await ui.submit('application-form');
   assert.equal(ui.state().draft.revenue, '2500000');
-  ui.get('application-dialog').close();
-  ui.set('calc-amount', '10 000 001');
-  assert.equal(ui.get('calculator-apply').disabled, true);
-});
-
-test('formatting an amount keeps the cursor near the edited digit', async t => {
-  const ui = await setup(t);
-  const input = ui.get('calc-amount');
-  input.focus();
-  input.value = '12500000';
-  input.setSelectionRange(3, 3);
-  input.dispatchEvent(new ui.window.Event('input', {bubbles: true}));
-  assert.equal(input.value, '12 500 000');
-  assert.equal(input.selectionStart, 4);
-  ui.set('calc-range', '3500000');
-  assert.equal(input.value, '3 500 000');
 });

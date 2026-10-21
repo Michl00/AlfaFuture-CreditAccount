@@ -30,18 +30,48 @@
     if (!Number.isInteger(Number(data.age)) || Number(data.age) > 1200) return 'Укажите возраст бизнеса в полных месяцах (до 1200).';
     return null;
   }
-  function decide(data) {
-    const product = products.find(item => item.id === data.product);
-    if (validate(data)) throw new Error('Invalid demonstration application');
-    if (Number(data.age) < 6 && !data.clarification) return {status: 'needs_info'};
-    const available = (Number(data.revenue) - Number(data.expenses)) * 0.5 - Number(data.debt);
-    const monthly = payment(Number(data.amount), Number(data.months), product.rate);
-    if (available >= monthly) return {status: 'approved', offeredAmount: Number(data.amount)};
-    const affordable = Math.min(Number(data.amount), Math.floor(available / payment(1, Number(data.months), product.rate) / 10000) * 10000);
-    if (affordable >= 100000) return {status: 'alternative', offeredAmount: affordable};
-    return {status: 'declined'};
+  function validateRequest(data) {
+    if (!products.some(p => p.id === data.goal)) return 'Укажите цель финансирования.';
+    if (!Number.isFinite(Number(data.requestedAmount)) || Number(data.requestedAmount) < 100000 || Number(data.requestedAmount) > 10000000) return 'Укажите сумму от 100 000 до 10 000 000 ₽.';
+    if (!Number.isInteger(Number(data.requestedMonths)) || Number(data.requestedMonths) < 6 || Number(data.requestedMonths) > 60) return 'Укажите срок от 6 до 60 месяцев.';
+    return null;
   }
-  const api = {products, payment, validInn, validate, decide};
+  function recommend(data) {
+    if (validateRequest(data)) throw new Error('Invalid financing request');
+    return [...products].sort((a, b) => Number(b.id === data.goal) - Number(a.id === data.goal)).map((product, index) => {
+      const amount = Math.min(Number(data.requestedAmount), product.max);
+      const months = Math.min(Number(data.requestedMonths), product.months);
+      return {product: product.id, amount, months, rate: product.rate, payment: payment(amount, months, product.rate), recommended: index === 0,
+        reason: product.id === data.goal ? 'Соответствует вашей цели финансирования.' : product.description,
+        limited: amount !== Number(data.requestedAmount) || months !== Number(data.requestedMonths)};
+    });
+  }
+  function assess(data) {
+    if (validate(data)) throw new Error('Invalid demonstration application');
+    if (Number(data.age) < 6 && (!data.clarification || data.clarification.trim().length < 20)) {
+      return {status: 'needs_info', reasons: ['Бизнес работает меньше полугода. Расскажите о заключённых договорах и источниках выручки.']};
+    }
+    const product = products.find(item => item.id === data.product);
+    const available = (Number(data.revenue) - Number(data.expenses)) * 0.5 - Number(data.debt);
+    const initialPayment = payment(Number(data.amount), Number(data.months), product.rate);
+    const risk = available < initialPayment ? 'high' : Number(data.age) < 12 || initialPayment > available * 0.7 ? 'medium' : 'low';
+    const rate = Math.round((product.rate + (risk === 'high' ? 3 : risk === 'medium' ? 1.5 : 0)) * 10) / 10;
+    let months = Number(data.months);
+    // First consider a longer term, then a smaller principal if necessary.
+    if (payment(Number(data.amount), months, rate) > available) months = Math.min(product.months, months + 12);
+    const affordable = Math.floor(available / payment(1, months, rate) / 10000) * 10000;
+    const amount = Math.min(Number(data.amount), affordable);
+    if (amount < 100000 || available <= 0) return {status: 'unavailable', risk: 'high', reasons: ['Свободного дохода сейчас недостаточно для платежа. Попробуйте изменить сумму или финансовые данные.']};
+    const reasons = [];
+    if (months !== Number(data.months)) reasons.push('Срок увеличен, чтобы снизить ежемесячный платёж.');
+    if (amount !== Number(data.amount)) reasons.push('Сумма уменьшена, чтобы платёж соответствовал возможностям бизнеса.');
+    if (rate !== product.rate) reasons.push('В демонстрационной оценке ставка скорректирована с учётом срока работы бизнеса и нагрузки на доход.');
+    if (!reasons.length) reasons.push('Указанных доходов достаточно для выбранных условий. Корректировки не понадобились.');
+    return {status: 'ready', risk, reasons, terms: {amount, months, rate, payment: payment(amount, months, rate)}};
+  }
+  // Replace this boundary with server-backed recommendations/assessment when CometAPI is connected.
+  const advisor = {recommend, assess};
+  const api = {products, payment, validInn, validate, validateRequest, advisor};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CreditFlow = api;
 })(typeof window === 'undefined' ? globalThis : window);
