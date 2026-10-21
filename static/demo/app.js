@@ -3,6 +3,26 @@
 const {products, payment, validInn, validate, decide} = window.CreditFlow;
 const $ = id => document.getElementById(id);
 const money = amount => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(amount) + ' ₽';
+const moneyFields = new Set(['amount', 'revenue', 'expenses', 'debt']);
+const ungroup = value => String(value).replace(/\s/g, '');
+const groupDigits = value => ungroup(value).replace(/\D/g, '').replace(/^0+(?=\d)/, '').replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+function formatMoneyInput(input) {
+  const caret = input.selectionStart;
+  const digitsBefore = caret === null ? null : input.value.slice(0, caret).replace(/\D/g, '').length;
+  input.value = groupDigits(input.value);
+  if (digitsBefore !== null && document.activeElement === input) {
+    let position = 0;
+    let count = 0;
+    while (position < input.value.length && count < digitsBefore) {
+      if (/\d/.test(input.value[position])) count += 1;
+      position += 1;
+    }
+    input.setSelectionRange(position, position);
+  }
+  const amount = Number(ungroup(input.value));
+  const invalid = input.value && (amount < Number(input.dataset.min) || amount > Number(input.dataset.max));
+  input.setCustomValidity(invalid ? `Укажите сумму от ${money(Number(input.dataset.min))} до ${money(Number(input.dataset.max))}.` : '');
+}
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
 const statusNames = {draft: 'Черновик', review: 'На рассмотрении', needs_info: 'Нужны уточнения', approved: 'Одобрено', alternative: 'Есть предложение', declined: 'Не одобрено', accepted: 'Условия приняты'};
 const finished = ['declined', 'accepted'];
@@ -73,8 +93,10 @@ function renderProducts() {
   $('all-products').innerHTML = html;
 }
 function updateCalculator(source) {
-  const amount = Number($(source).value);
-  if (Number.isFinite(amount)) $(source === 'calc-range' ? 'calc-amount' : 'calc-range').value = amount;
+  if (source === 'calc-range') $('calc-amount').value = $('calc-range').value;
+  formatMoneyInput($('calc-amount'));
+  const amount = Number(ungroup($('calc-amount').value));
+  if (Number.isFinite(amount)) $('calc-range').value = amount;
   const valid = amount >= 100000 && amount <= 10000000;
   $('calc-payment').textContent = valid ? money(payment(amount, Number($('calc-term').value), 24.9)) : 'Уточните сумму';
   $('calculator-apply').disabled = !valid;
@@ -115,7 +137,7 @@ function beginApplication(productId, fromCalculator = false) {
   }
   if (fromCalculator) {
     draft.product = Number($('calc-term').value) > 36 ? 'equipment' : 'working';
-    draft.amount = Number($('calc-amount').value);
+    draft.amount = Number(ungroup($('calc-amount').value));
     draft.months = Number($('calc-term').value);
   }
   wizardStep = 0;
@@ -125,8 +147,10 @@ function beginApplication(productId, fromCalculator = false) {
   showDialog('application-dialog');
 }
 function field(name, label, options = {}) {
-  const value = escapeHTML(draft[name] ?? '');
-  return `<div class="field"><label for="app-${name}">${label}</label><input id="app-${name}" name="${name}" value="${value}" type="${options.type || 'text'}" ${options.min !== undefined ? `min="${options.min}"` : ''} ${options.max !== undefined ? `max="${options.max}"` : ''} ${options.step ? `step="${options.step}"` : ''} ${options.maxLength ? `maxlength="${options.maxLength}"` : ''} required>${options.hint ? `<p class="field-hint">${options.hint}</p>` : ''}</div>`;
+  const monetary = moneyFields.has(name);
+  const value = escapeHTML(monetary ? groupDigits(draft[name] ?? '') : draft[name] ?? '');
+  const constraints = monetary ? `inputmode="numeric" data-money data-min="${options.min}" data-max="${options.max}"` : `${options.min !== undefined ? `min="${options.min}"` : ''} ${options.max !== undefined ? `max="${options.max}"` : ''} ${options.step ? `step="${options.step}"` : ''}`;
+  return `<div class="field"><label for="app-${name}">${label}</label><input id="app-${name}" name="${name}" value="${value}" type="${monetary ? 'text' : options.type || 'text'}" ${constraints} ${options.maxLength ? `maxlength="${options.maxLength}"` : ''} required>${options.hint ? `<p class="field-hint">${options.hint}</p>` : ''}</div>`;
 }
 function draftPayment() {
   const product = products.find(p => p.id === draft.product);
@@ -154,16 +178,18 @@ function renderWizard() {
 }
 function captureDraft() {
   if (!draft) return;
-  for (const [key, value] of new FormData($('application-form'))) if (key !== 'consent') draft[key] = value;
+  for (const [key, value] of new FormData($('application-form'))) if (key !== 'consent') draft[key] = moneyFields.has(key) ? ungroup(value) : value;
 }
 $('application-form').addEventListener('input', event => {
+  if (event.target.hasAttribute('data-money')) formatMoneyInput(event.target);
   captureDraft();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(persist, 250);
   if (wizardStep === 0) {
     if (event.target.name === 'product') {
       const product = products.find(p => p.id === draft.product);
-      $('app-amount').max = product.max;
+      $('app-amount').dataset.max = product.max;
+      formatMoneyInput($('app-amount'));
       $('app-months').max = product.months;
     }
     $('wizard-payment').textContent = draftPayment();

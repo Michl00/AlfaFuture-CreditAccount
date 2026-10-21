@@ -93,7 +93,7 @@ test('calculator transfers selected terms to the application', async t => {
   ui.set('calc-amount', 2000000);
   ui.get('calc-term').value = '60';
   ui.get('calculator-apply').click();
-  assert.equal(ui.get('app-amount').value, '2000000');
+  assert.equal(ui.get('app-amount').value, '2 000 000');
   assert.equal(ui.get('app-months').value, '60');
   assert.equal(ui.get('app-product').value, 'equipment');
 });
@@ -145,7 +145,7 @@ test('draft survives closing and reload, and can be deleted', async t => {
   ui.click('[data-close="application-dialog"]');
   const restored = await setup(t, {storage: {'credit-cabinet-v1:guest': JSON.stringify(ui.state())}});
   restored.click('[data-action="apply"]');
-  assert.equal(restored.get('app-amount').value, '2100000');
+  assert.equal(restored.get('app-amount').value, '2 100 000');
   restored.click('[data-close="application-dialog"]');
   restored.click('[data-action="delete-draft"]');
   assert.equal(restored.state().draft, null);
@@ -205,4 +205,40 @@ test('unavailable storage leaves the working flow usable and warns the user', as
   ui.click('[data-action="apply"]');
   assert.equal(ui.get('application-dialog').open, true);
   assert.match(ui.get('draft-status').textContent, /до закрытия вкладки/);
+});
+
+
+test('money inputs group digits while preserving numeric calculations and range limits', async t => {
+  const ui = await setup(t);
+  assert.equal(ui.get('calc-amount').value, '1 500 000');
+  ui.set('calc-amount', '10\u00a0000\u00a0000');
+  assert.equal(ui.get('calc-amount').value, '10 000 000');
+  assert.equal(ui.get('calc-range').value, '10000000');
+  assert.equal(ui.get('calculator-apply').disabled, false);
+  ui.get('calculator-apply').click();
+  assert.equal(ui.get('app-amount').value, '10 000 000');
+  await ui.submit('application-form');
+  ui.click('[data-action="sample"]');
+  assert.equal(ui.get('app-revenue').value, '1 200 000');
+  assert.equal(ui.get('app-expenses').value, '700 000');
+  assert.equal(ui.get('app-debt').value, '20 000');
+  ui.set('app-revenue', '2 500 000');
+  await ui.submit('application-form');
+  assert.equal(ui.state().draft.revenue, '2500000');
+  ui.get('application-dialog').close();
+  ui.set('calc-amount', '10 000 001');
+  assert.equal(ui.get('calculator-apply').disabled, true);
+});
+
+test('formatting an amount keeps the cursor near the edited digit', async t => {
+  const ui = await setup(t);
+  const input = ui.get('calc-amount');
+  input.focus();
+  input.value = '12500000';
+  input.setSelectionRange(3, 3);
+  input.dispatchEvent(new ui.window.Event('input', {bubbles: true}));
+  assert.equal(input.value, '12 500 000');
+  assert.equal(input.selectionStart, 4);
+  ui.set('calc-range', '3500000');
+  assert.equal(input.value, '3 500 000');
 });
