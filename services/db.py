@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import Depends
 from fastapi_users.db import SQLAlchemyBaseUserTable, SQLAlchemyUserDatabase
-from sqlalchemy import CheckConstraint, Integer, String, event
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, JSON, LargeBinary, event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -29,6 +29,57 @@ class User(SQLAlchemyBaseUserTable[int], Base):
             "inn NOT GLOB '*[^0-9]*' AND length(inn) IN (10, 12)", name="ck_inn"
         ),
     )
+
+
+class BankStaff(Base):
+    __tablename__ = 'bank_staff'
+    user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), primary_key=True)
+
+
+class UploadedDocument(Base):
+    __tablename__ = 'uploaded_documents'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), index=True)
+    filename: Mapped[str] = mapped_column(String(180))
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    fields: Mapped[dict] = mapped_column(JSON)
+    warnings: Mapped[list] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer)
+
+
+class CreditAssessment(Base):
+    __tablename__ = 'credit_assessments'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer)
+
+
+class CreditApplication(Base):
+    __tablename__ = 'credit_applications'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    assessment_id: Mapped[str] = mapped_column(ForeignKey('credit_assessments.id'), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('user.id'), index=True)
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    assigned_to: Mapped[int | None] = mapped_column(ForeignKey('user.id'), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    payload: Mapped[dict] = mapped_column(JSON)
+    checks: Mapped[dict] = mapped_column(JSON)
+    score: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class ApplicationEvent(Base):
+    __tablename__ = 'application_events'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    application_id: Mapped[str] = mapped_column(ForeignKey('credit_applications.id'), index=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey('user.id'))
+    action: Mapped[str] = mapped_column(String(32))
+    comment: Mapped[str] = mapped_column(String(2000))
+    created_at: Mapped[int] = mapped_column(Integer)
 
 
 engine = create_async_engine(config.db.url, connect_args={"timeout": 10})

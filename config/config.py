@@ -31,7 +31,7 @@ class LogConfig:
 @dataclass
 class CometConfig:
     api_key: str = field(default='', repr=False)
-    model: str = ''
+    model: str = 'qwen3.8-flash'
 
 @dataclass
 class Config:
@@ -68,7 +68,7 @@ def load_config(path: str | None = None) -> Config:
             reset_password_url=env.str('RESET_PASSWORD_URL', default=''),
         ),
         comet=CometConfig(
-            api_key=env.str('COMETAPI_API_KEY', default=''),
-            model=env.str('COMETAPI_MODEL', default=''),
+            api_key=env.str('COMETAPI_KEY', default='') or env.str('COMETAPI_API_KEY', default=''),
+            model=env.str('COMETAPI_MODEL', default='qwen3.8-flash'),
         ),
     )

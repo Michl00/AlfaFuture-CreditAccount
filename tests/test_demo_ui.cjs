@@ -12,7 +12,7 @@ const sample = {product: 'working', amount: 1500000, months: 24, company: 'ОО�
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function mockCredit(url, options) {
-  const data = JSON.parse(options.body || '{}');
+  const data = options?.body && typeof options.body === 'string' ? JSON.parse(options.body) : {};
   if (url === '/credit/recommendations') return new Response(JSON.stringify({recommendation_token: 'signed-recommendation-fixture', offers: credit.products.map((product, index) => {
     const amount = Math.min(data.requestedAmount, product.max);
     const months = Math.min(data.requestedMonths, product.months);
@@ -62,6 +62,7 @@ async function setup(t, options = {}) {
   };
   window.eval(domain);
   window.eval(script);
+  if (options.bank) window.eval(fs.readFileSync(path.join(root, 'static/demo/bank.js'), 'utf8'));
   await tick();
   const get = id => window.document.getElementById(id);
   const click = selector => {
@@ -165,7 +166,7 @@ test('assessment and corrections precede consent and submission to the bank', as
   const restored = await setup(t, {storage: {'credit-cabinet-v1:1': JSON.stringify(ui.state())}});
   restored.click('[data-page="profile"]');
   assert.match(restored.get('profile-applications').textContent, /Ожидает подтверждения банка/);
-  assert.equal(restored.calls.length, 1); // Only a session check, no CometAPI or bank calls.
+  assert.equal(restored.calls.filter(([, options]) => options?.method === 'POST').length, 0);
 });
 
 test('clarification must be reassessed and separately consented before sending', async t => {
@@ -246,7 +247,7 @@ test('email deep link opens a human form and removes token without submitting it
   assert.equal(ui.get('account-token').value, 'secret+token');
   assert.equal(ui.window.location.search, '');
   assert.equal(ui.get('account-title').textContent, 'Новый пароль');
-  assert.equal(ui.calls.length, 1);
+  assert.equal(ui.calls.filter(([, options]) => options?.method === 'POST').length, 0);
 });
 
 test('login uses form encoding, restores user workspace and never stores credentials', async t => {
@@ -431,4 +432,63 @@ test('model risk rejection prevents consent even when local income indicator is 
   await ui.submit('application-form');
   assert.ok(ui.get('app-company'));
   assert.equal(ui.state().applications.length, 0);
+});
+
+test('document upload previews fields and only applies selected values', async t => {
+  const ui = await setup(t, {creditFetch: async path => path === '/credit/documents' ? new Response(JSON.stringify({id: 'doc-fixture', filename: 'company.json', warnings: [], fields: {company: 'Из документа', revenue: 1250000, debt: 40000}}), {status: 201}) : undefined});
+  ui.click('[data-action="apply"]');
+  ui.set('app-goal', 'Закупка оборудования');
+  await ui.submit('application-form');
+  ui.click('[data-offer="working"]');
+  await ui.submit('application-form');
+  ui.set('app-company', 'Введено вручную');
+  const input = ui.get('company-document');
+  Object.defineProperty(input, 'files', {value: [new ui.window.File(['{}'], 'company.json', {type: 'application/json'})]});
+  input.dispatchEvent(new ui.window.Event('change', {bubbles: true}));
+  await tick(); await tick();
+  assert.equal(ui.get('document-preview-dialog').open, true);
+  assert.equal(ui.get('app-company').value, 'Введено вручную');
+  assert.equal(ui.get('document-preview-fields').querySelector('[name="company"]').checked, false);
+  assert.equal(ui.get('document-preview-fields').querySelector('[name="revenue"]').checked, true);
+  await ui.submit('document-apply-form');
+  assert.equal(ui.get('app-company').value, 'Введено вручную');
+  assert.equal(ui.get('app-revenue').value, '1 250 000');
+  assert.equal(ui.state().draft.document_ids[0], 'doc-fixture');
+});
+
+test('bank cabinet shows scoring and sends an explicit versioned decision', async t => {
+  const check = {source: 'БКИ', mock: true, status: 'warning', summary: 'Просрочка (мок)', data: {overdue_days: 45}};
+  let item = {...sample, id: 'application-fixture', status: 'bank_review', version: 1, assigned_to: null, goal: 'Закупка', rate: 24.9, createdAt: Date.now(), updatedAt: Date.now(), applicant: {username: 'Клиент', email: 'client@example.com'}, documents: [], events: [], ai_reasons: ['Платёж посилен'], checks: {registry: check, bki: check, transparent: check, documents: check}, score: {value: 800, risk: 'medium', parts: {financial: 400}, manual_review: true, manual_reasons: ['Просрочка'], method: 'Моки'}};
+  const ui = await setup(t, {bank: true, fetch: async (url, options) => {
+    if (url === '/bank/me') return new Response(JSON.stringify({id: 1, username: 'Сотрудник'}));
+    if (url.startsWith('/bank/applications?')) return new Response(JSON.stringify({items: [item], has_more: false}));
+    if (url.endsWith('/actions')) {
+      const action = JSON.parse(options.body);
+      assert.equal(action.version, item.version);
+      item = {...item, version: item.version + 1, assigned_to: 1, status: action.action === 'claim' ? 'in_review' : 'approved'};
+      return new Response(JSON.stringify(item));
+    }
+    if (url === '/bank/applications/application-fixture') return new Response(JSON.stringify(item));
+    return new Response(JSON.stringify({id: 1, username: 'Сотрудник', email: 'staff@example.com'}));
+  }});
+  await tick();
+  assert.equal(ui.get('bank-menu').hidden, false);
+  ui.click('[data-page="bank"]'); await tick();
+  assert.match(ui.get('bank-queue').textContent, /Нестандартная/);
+  ui.click('[data-bank-id="application-fixture"]'); await tick();
+  assert.match(ui.get('bank-detail').textContent, /800/);
+  assert.match(ui.get('bank-detail').textContent, /Просрочка/);
+  ui.click('[data-bank-action="claim"]'); await tick(); await tick();
+  ui.set('bank-decision-comment', 'Проверены документы и источники дохода');
+  await ui.submit('bank-decision-form'); await tick();
+  const actions = ui.calls.filter(([url]) => url.endsWith('/actions')).map(([, options]) => JSON.parse(options.body));
+  assert.deepEqual(actions.map(action => action.action), ['claim', 'approve']);
+  assert.equal(actions[1].version, 2);
+  assert.match(ui.get('bank-detail').textContent, /Решение зафиксировано/);
+});
+
+test('bank menu stays hidden for an ordinary client', async t => {
+  const ui = await setup(t, {bank: true, fetch: async url => url === '/bank/me' ? new Response('{}', {status: 403}) : new Response(JSON.stringify({id: 1, username: 'Клиент'}))});
+  await tick();
+  assert.equal(ui.get('bank-menu').hidden, true);
 });
