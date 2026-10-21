@@ -1,13 +1,16 @@
-# from environs import Env
-# Когда добавим пароли и т.д.
 from dataclasses import dataclass
-from pathlib import Path
+
+from environs import Env
 
 
 @dataclass
 class DBConfig:
-    table: str
-    path: str
+    url: str
+
+@dataclass
+class AuthConfig:
+    secret: str
+    cookie_secure: bool
 
 @dataclass
 class LogConfig:
@@ -19,21 +22,23 @@ class LogConfig:
 class Config:
     db: DBConfig
     log: LogConfig
+    auth: AuthConfig
 
 
 
 def load_config(path: str | None = None) -> Config:
-    # env = Env()
-    # env.read_env(path)
+    env = Env()
+    env.read_env(path)
 
     return Config(
-        db=DBConfig(
-            table = Path("config/schema.sql").read_text(encoding="utf-8"),
-            path="app.db",
-        ),
+        db=DBConfig(url="sqlite+aiosqlite:///./app.db"),
         log=LogConfig(
             level = "DEBUG",
             format = "[%(asctime)s] #%(levelname)8s %(name)s -%(filename)s:%(lineno)d %(message)s",
             file = 'app.log',
+        ),
+        auth=AuthConfig(
+            secret=env('SECRET'),
+            cookie_secure=env('COOKIE_SECURE') == 'true',
         ),
     )

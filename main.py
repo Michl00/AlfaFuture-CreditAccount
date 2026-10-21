@@ -1,43 +1,46 @@
-import asyncio
 import logging
+from contextlib import asynccontextmanager
+from typing import Annotated
 
-import aiosqlite
+from fastapi import Depends, FastAPI
 
 from config.config import Config, load_config
-from services.db import UserExistsError
-from services.services import ValidationError, register_user
+from services.db import User, create_db_and_tables
+from services.schemas import UserCreate, UserRead, UserUpdate
+from services.users import auth_backend, current_active_user, fastapi_users
 
 config: Config = load_config()
 
 logging.basicConfig(
-    format = config.log.format,
-    level = config.log.level,
-    filemode='a',
+    format=config.log.format,
+    level=config.log.level,
+    filemode="a",
     filename=config.log.file,
 )
 logger = logging.getLogger(__name__)
 
-async def main():
-    async with aiosqlite.connect(config.db.path, timeout=10) as conn:
-        conn.row_factory = aiosqlite.Row
-        await conn.execute('PRAGMA foreign_keys = ON')
-        await conn.execute('PRAGMA journal_mode = WAL')
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await create_db_and_tables()
+    logger.info("db ready")
+    yield
 
 
-        await conn.execute(config.db.table)
-        await conn.commit()
-        logger.info('db connected succesfully')
+app = FastAPI(lifespan=lifespan)
 
-        # Тестовая регистрация пользователя
-        try:
-            user_id = await register_user(
-                conn, "alice", "alice@example.com", "strongpass123", "7707083893"
-            )
-            logger.info("user created: id=%s", user_id)
-        except ValidationError as e:
-            logger.warning("validation failed: %s", e)
-        except UserExistsError as e:
-            logger.warning("registration failed: %s", e)
+app.include_router(fastapi_users.get_auth_router(auth_backend),
+                   prefix="/auth", tags=["auth"])
+app.include_router(fastapi_users.get_register_router(UserRead, UserCreate),
+                   prefix="/auth", tags=["auth"])
+app.include_router(fastapi_users.get_reset_password_router(),
+                   prefix="/auth", tags=["auth"])
+app.include_router(fastapi_users.get_verify_router(UserRead),
+                   prefix="/auth", tags=["auth"])
+app.include_router(fastapi_users.get_users_router(UserRead, UserUpdate),
+                   prefix="/users", tags=["users"])
 
-if __name__=='__main__':
-    asyncio.run(main())
+
+@app.get("/profile")
+async def profile(user: Annotated[User, Depends(current_active_user)]):
+    return {"id": user.id, "username": user.username, "email": user.email}

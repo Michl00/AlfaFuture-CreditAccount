@@ -1,34 +1,59 @@
-import sqlite3
+from collections.abc import AsyncGenerator
+from typing import Annotated
 
-import aiosqlite
+from fastapi import Depends
+from fastapi_users.db import SQLAlchemyBaseUserTable, SQLAlchemyUserDatabase
+from sqlalchemy import CheckConstraint, Integer, String, event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from config.config import load_config
 
-class UserExistsError(Exception):
-    """username или email уже заняты."""
-
-
-async def create_user(conn: aiosqlite.Connection, username: str, email: str,
-                      password_hash: str, inn: str) -> int:
-    try:
-        cur = await conn.execute(
-            "INSERT INTO users (username, email, password_hash, inn) "
-            "VALUES (?, ?, ?, ?)",
-            (username, email, password_hash, inn),
-        )
-        await conn.commit()
-        if cur.lastrowid is None:
-            raise RuntimeError("INSERT не вернул id")
-        return cur.lastrowid
-    except sqlite3.IntegrityError as e:
-        await conn.rollback()
-        msg = str(e)
-        if "users.username" in msg:
-            raise UserExistsError("username уже занят") from e
-        if "users.email" in msg:
-            raise UserExistsError("email уже зарегистрирован") from e
-        raise   # другое нарушение (например, CHECK) не скрываем
+config = load_config()
 
 
-async def get_user_by_email(conn: aiosqlite.Connection, email: str):
-    cur = await conn.execute("SELECT * FROM users WHERE email = ?", (email,))
-    return await cur.fetchone()
+class Base(DeclarativeBase):
+    pass
+
+
+class User(SQLAlchemyBaseUserTable[int], Base):
+    # уже есть в базовом классе: email (unique), hashed_password,
+    # is_active, is_superuser, is_verified
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(20))
+    inn: Mapped[str] = mapped_column(String(12))
+
+    __table_args__ = (
+        CheckConstraint("length(username) BETWEEN 3 AND 20", name="ck_username_len"),
+        CheckConstraint(
+            "inn NOT GLOB '*[^0-9]*' AND length(inn) IN (10, 12)", name="ck_inn"
+        ),
+    )
+
+
+engine = create_async_engine(config.db.url, connect_args={"timeout": 10})
+async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _set_pragmas(dbapi_conn, _):
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA foreign_keys = ON")
+    cur.execute("PRAGMA journal_mode = WAL")
+    cur.close()
+
+
+async def create_db_and_tables() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
+    async with async_session_maker() as session:
+        yield session
+
+
+async def get_user_db(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+):
+    yield SQLAlchemyUserDatabase(session, User)
