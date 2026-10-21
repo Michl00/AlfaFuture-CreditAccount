@@ -64,14 +64,27 @@ function persist() {
   }
   $('draft-status').textContent = storageAvailable ? 'Черновик сохранён на этом устройстве' : 'Изменения доступны до закрытия вкладки';
 }
+function applyRole() {
+  const employee = Boolean(user?.is_employee);
+  for (const button of document.querySelectorAll('.nav-item')) {
+    button.hidden = employee ? !['bank', 'profile'].includes(button.dataset.page) : button.dataset.page === 'bank';
+  }
+  $('profile-page').querySelector('.lead').textContent = employee ? 'Данные аккаунта сотрудника банка.' : 'Данные аккаунта и заявки на подтверждении банка.';
+  if (employee) {
+    pendingApplication = null;
+    for (const id of ['application-dialog', 'detail-dialog', 'amount-dialog', 'help-dialog']) if ($(id).open) closeDialog(id);
+    if (!['bank', 'profile'].includes(currentPage)) navigate('bank');
+  } else if (currentPage === 'bank') navigate('home');
+}
 function loadWorkspace() {
-  window.dispatchEvent(new CustomEvent('cabinet-auth'));
   adviceVersion += 1;
   clearTimeout(saveTimer);
   assessmentBusy = false;
   draft = null;
   applications = [];
-  if (!user) {renderAll(); return;}
+  applyRole();
+  window.dispatchEvent(new CustomEvent('cabinet-auth'));
+  if (!user || user.is_employee) {renderAll(); return;}
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey()) || '{}');
     if (saved.draft && typeof saved.draft === 'object' && products.some(p => p.id === saved.draft.product)) {
@@ -94,6 +107,7 @@ function emptyDraft() {
   return {goal: '', requestedAmount: 1500000, requestedMonths: 24, selectedOffer: null, stage: 0, product: 'working', amount: 1500000, months: 24, company: '', inn: '', revenue: '', expenses: '', debt: 0, age: '', clarification: '', document_ids: [], documents: []};
 }
 function navigate(page) {
+  if (user?.is_employee && !['bank', 'profile'].includes(page)) page = 'bank';
   currentPage = page;
   document.body.classList.toggle('home-view', page === 'home');
   if ($('menu-dialog').open) closeDialog('menu-dialog');
@@ -146,6 +160,7 @@ function renderAll() {
   if (currentPage === 'profile') renderProfile();
 }
 function beginApplication(productId, fromCalculator = false) {
+  if (user?.is_employee) {navigate('bank'); return;}
   if (resolvingSession) { notify('Подождите, проверяем вход в кабинет.'); return; }
   if (!user) {pendingApplication = {productId, fromCalculator}; showRegistrationStep(); return;}
   if (!draft) draft = emptyDraft();
@@ -274,10 +289,10 @@ function renderWizard() {
       $('wizard-fields').innerHTML = `<h3>Нужно немного больше информации</h3>${reasons}<div class="field"><label for="app-clarification">Расскажите о договорах и источниках выручки</label><textarea id="app-clarification" name="clarification" minlength="20" maxlength="2000" required>${escapeHTML(draft.clarification)}</textarea></div>`;
       $('wizard-next').innerHTML = 'Продолжить оценку <span>→</span>';
     } else if (['blocked', 'unavailable'].includes(assessment.status)) {
-      $('wizard-fields').innerHTML = `<h3>Слишком низкие шансы на согласование</h3>${reasons}<p class="muted">Это предварительная оценка, а не решение банка. Заявка не отправлена.</p>`;
+      $('wizard-fields').innerHTML = `<h3>Слишком высокий риск по текущим условиям</h3>${reasons}<p class="muted">Это предварительная оценка, а не решение банка. Заявка не отправлена.</p>`;
       $('wizard-next').innerHTML = 'Изменить условия <span>→</span>';
     } else {
-      $('wizard-fields').innerHTML = `<div class="section-heading"><h3>Ваши условия к согласованию</h3><span class="offer-tag">Предварительная оценка</span></div>${comparison(assessment)}${reasons}<div class="info-banner"><p>Банк ещё не получил заявку и не принимал решение. Проверьте изменения и подтвердите согласие на отправку.</p></div><label class="checkbox-label"><input name="consent" type="checkbox" required><span>Согласен с указанными выше суммой, сроком, ставкой и платежом и хочу отправить заявку на подтверждение в банк.</span></label>`;
+      $('wizard-fields').innerHTML = `<div class="section-heading"><h3>Ваши условия к согласованию</h3><span class="offer-tag">Предварительная оценка</span></div>${comparison(assessment)}${reasons}<div class="info-banner"><p>ИИ оценил риски и условия. После вашего согласия заявка поступит в панель сотрудника банка. Окончательное решение принимает сотрудник.</p></div><label class="checkbox-label"><input name="consent" type="checkbox" required><span>Согласен с указанными выше суммой, сроком, ставкой и платежом и хочу отправить заявку на подтверждение в банк.</span></label>`;
     }
   }
   if (wizardStep === 2) updateApprovalIndicator();
@@ -390,7 +405,7 @@ $('application-form').addEventListener('submit', async event => {
     closeDialog('application-dialog');
     renderApplications();
     navigate('profile');
-    notify('Условия согласованы. Демо-заявка ожидает подтверждения банка и доступна в профиле.');
+    notify('Условия согласованы. Заявка передана в панель сотрудника банка и доступна в профиле.');
   }
 });
 $('wizard-back').addEventListener('click', () => {
@@ -401,7 +416,7 @@ $('wizard-back').addEventListener('click', () => {
   moveToStep(Math.max(0, wizardStep - 1));
 });
 async function refreshApplications() {
-  if (!user) return;
+  if (!user || user.is_employee) return;
   const ownerId = user.id;
   try {
     const result = await api('/credit/applications');
@@ -441,7 +456,8 @@ function renderDetail() {
 const eventLabels = {submit: 'Заявка отправлена', claim: 'Заявка взята в работу', approve: 'Одобрено сотрудником', reject: 'Отказ', request_info: 'Запрошено уточнение', clarification: 'Ответ клиента', recheck: 'Проверки обновлены'};
 function renderProfile() {
   const account = !user ? '<div class="card profile-card"><h2>Рады знакомству</h2><p class="muted">Войдите или создайте аккаунт для работы с профилем. Регистрация обязательна для составления заявки.</p><button class="button primary" data-action="login">Войти</button><button class="button secondary" data-action="register">Создать аккаунт</button></div>' : `<div class="card profile-card"><h2>${escapeHTML(user.username)}</h2><div class="profile-data"><span>Электронная почта</span><strong>${escapeHTML(user.email)}</strong></div><button class="button secondary" data-action="edit-profile">Изменить имя</button><button class="text-button" data-action="logout">Выйти из кабинета</button></div>`;
-  $('profile-content').innerHTML = `${account}<section class="section"><div class="section-heading"><h2>Заявки на подтверждении <span class="inline-count">${applications.filter(item => item.status === 'bank_review').length}</span></h2></div><div id="profile-applications">${applications.map(applicationCard).join('') || emptyApplications()}</div></section><div class="info-banner"><p>Заявки и решения сотрудников хранятся на сервере и доступны после входа с любого устройства.</p></div>`;
+  if (user?.is_employee) { $('profile-content').innerHTML = account; return; }
+  $('profile-content').innerHTML = `${account}${user && !user.is_employee ? `<div class="card profile-card"><h2>ИНН компании <span class="muted">· необязательно</span></h2><p class="muted">Добавьте реквизиты компании в профиль, когда будет удобно.</p><div class="profile-data"><span>ИНН</span><strong>${escapeHTML(user.inn || 'Не указан')}</strong></div><button class="button secondary" data-action="edit-inn">${user.inn ? 'Изменить или удалить ИНН' : 'Добавить ИНН'}</button></div>` : ''}<section class="section"><div class="section-heading"><h2>Заявки на подтверждении <span class="inline-count">${applications.filter(item => item.status === 'bank_review').length}</span></h2></div><div id="profile-applications">${applications.map(applicationCard).join('') || emptyApplications()}</div></section><div class="info-banner"><p>Заявки и решения сотрудников хранятся на сервере и доступны после входа с любого устройства.</p></div>`;
 }
 const accountFields = {
   email: {label: 'Электронная почта', type: 'email', autocomplete: 'email'},
@@ -452,13 +468,14 @@ const accountFields = {
 };
 const accountModes = {
   login: {title: 'Вход в кабинет', description: 'Рады видеть вас снова.', fields: ['email', 'password'], button: 'Войти'},
-  register: {title: 'Давайте знакомиться', description: 'Создайте аккаунт для своего бизнеса.', fields: ['email', 'password', 'username', 'inn'], button: 'Создать аккаунт'},
+  register: {title: 'Давайте знакомиться', description: 'Создайте аккаунт для своего бизнеса.', fields: ['email', 'password', 'username'], button: 'Создать аккаунт'},
   forgot: {title: 'Восстановить доступ', description: 'Отправим ссылку для смены пароля на вашу почту.', fields: ['email'], button: 'Получить ссылку'},
   reset: {title: 'Новый пароль', description: 'Придумайте пароль от 8 до 128 символов.', fields: ['token', 'password'], button: 'Сохранить пароль'},
+  inn: {title: 'ИНН компании', description: 'Необязательно. Можно добавить ИНН сейчас или оставить поле пустым.', fields: ['inn'], button: 'Сохранить'},
   edit: {title: 'Как к вам обращаться?', description: 'Обновите имя в профиле.', fields: ['username'], button: 'Сохранить'},
 };
 function openAccount(mode) {
-  if (accountBusy) return;
+  if (accountBusy || mode === 'inn' && user?.is_employee) return;
   accountMode = mode;
   const config = accountModes[mode];
   $('account-submit').hidden = false;
@@ -468,8 +485,8 @@ function openAccount(mode) {
   $('account-submit').textContent = config.button;
   $('account-fields').innerHTML = config.fields.map(name => {
     const field = accountFields[name];
-    const value = mode === 'edit' ? user.username : '';
-    return `<div class="field"><label for="account-${name}">${field.label}</label><input id="account-${name}" name="${name}" type="${field.type || 'text'}" autocomplete="${mode === 'login' && name === 'password' ? 'current-password' : field.autocomplete || 'off'}" ${field.min && mode !== 'login' ? `minlength="${field.min}"` : ''} ${field.max && mode !== 'login' ? `maxlength="${field.max}"` : ''} value="${escapeHTML(value)}" required></div>`;
+    const value = mode === 'edit' ? user.username : mode === 'inn' ? user.inn || '' : '';
+    return `<div class="field"><label for="account-${name}">${field.label}</label><input id="account-${name}" name="${name}" type="${field.type || 'text'}" autocomplete="${mode === 'login' && name === 'password' ? 'current-password' : field.autocomplete || 'off'}" ${field.min && mode !== 'login' ? `minlength="${field.min}"` : ''} ${field.max && mode !== 'login' ? `maxlength="${field.max}"` : ''} value="${escapeHTML(value)}" ${mode === 'inn' ? 'inputmode="numeric"' : 'required'}></div>`;
   }).join('');
   $('account-links').innerHTML = mode === 'login' ? '<button type="button" data-action="register">Создать аккаунт</button><button type="button" data-action="forgot">Не помню пароль</button>' : mode === 'register' || mode === 'forgot' ? '<button type="button" data-action="login">Уже есть аккаунт? Войти</button>' : '';
   showDialog('account-dialog');
@@ -500,7 +517,11 @@ async function api(path, method = 'GET', payload, form = false) {
 }
 async function syncUser() {
   const result = await api('/users/me');
-  if (result.ok && result.data && typeof result.data.username === 'string') return result.data;
+  if (result.ok && result.data && typeof result.data.username === 'string') {
+    const role = await api('/bank/me');
+    if (!role.ok && ![401, 403].includes(role.status)) throw new Error('Role unavailable');
+    return {...result.data, is_employee: role.ok && role.data?.role === 'bank_employee'};
+  }
   if (result.status === 401 || result.status === 403) return null;
   throw new Error('Profile unavailable');
 }
@@ -534,22 +555,22 @@ $('account-form').addEventListener('submit', async event => {
   $('account-message').hidden = true;
   const mode = accountMode;
   const fields = Object.fromEntries(new FormData(event.target));
-  const paths = {login: '/auth/login', register: '/auth/register', forgot: '/auth/forgot-password', reset: '/auth/reset-password', edit: '/users/me'};
+  const paths = {login: '/auth/login', register: '/auth/register', forgot: '/auth/forgot-password', reset: '/auth/reset-password', edit: '/users/me', inn: '/users/me'};
   try {
-    const result = await api(paths[mode], mode === 'edit' ? 'PATCH' : 'POST', mode === 'login' ? {username: fields.email, password: fields.password} : fields, mode === 'login');
+    const result = await api(paths[mode], ['edit', 'inn'].includes(mode) ? 'PATCH' : 'POST', mode === 'login' ? {username: fields.email, password: fields.password} : fields, mode === 'login');
     if (!result.ok) {
-      $('account-message').textContent = result.status === 401 && mode === 'edit' ? 'Сессия закончилась. Войдите снова.' : errorMessage(result.data, mode);
+      $('account-message').textContent = result.status === 401 && ['edit', 'inn'].includes(mode) ? 'Сессия закончилась. Войдите снова.' : errorMessage(result.data, mode);
       $('account-message').className = 'form-message error';
       $('account-message').hidden = false;
       return;
     }
     if (mode === 'login') {
       await completeLogin();
-    } else if (mode === 'edit') {
-      user = result.data;
+    } else if (['edit', 'inn'].includes(mode)) {
+      user = {...result.data, is_employee: user.is_employee};
       renderAll();
       closeDialog('account-dialog');
-      notify('Имя в профиле обновлено.');
+      notify(mode === 'inn' ? 'ИНН в профиле сохранён.' : 'Имя в профиле обновлено.');
     } else if (mode === 'register') {
       // Registration creates an account; a successful cookie login opens the next step.
       const login = await api('/auth/login', 'POST', {username: fields.email, password: fields.password}, true);
@@ -617,11 +638,12 @@ document.addEventListener('click', event => {
   }
   const action = button.dataset.action;
   if (action === 'apply') beginApplication();
-  if (action === 'help') {closeDialog('menu-dialog'); showDialog('help-dialog');}
+  if (action === 'help' && !user?.is_employee) {closeDialog('menu-dialog'); showDialog('help-dialog');}
   if (action === 'delete-draft') {clearTimeout(saveTimer); draft = null; persist(); renderApplications(); notify('Черновик удалён.');}
   if (action === 'account') {closeDialog('menu-dialog'); user ? navigate('profile') : openAccount('login');}
   if (['login', 'register', 'forgot'].includes(action)) { if ($('application-dialog').open) closeDialog('application-dialog'); $('account-submit').hidden = false; openAccount(action); }
   if (action === 'edit-profile' && user) openAccount('edit');
+  if (action === 'edit-inn' && user) openAccount('inn');
   if (action === 'logout') logout();
   if (action === 'sample' && user && draft) {
     Object.assign(draft, {company: 'ООО «Вектор»', inn: '7701234560', revenue: 1200000, expenses: 700000, debt: 20000, age: 24});

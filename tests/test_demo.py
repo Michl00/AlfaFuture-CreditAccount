@@ -40,10 +40,10 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
     async def register(self):
         response = await self.client.post('/auth/register', json={
             'email': 'demo@example.com', 'password': 'test-password-123',
-            'username': 'demo_user', 'inn': '7707083893',
+            'username': 'demo_user',
         })
         self.assertEqual(response.status_code, 201, response.text)
-        self.assertNotIn('inn', response.json())
+        self.assertIsNone(response.json()['inn'])
 
     async def test_demo_and_assets(self):
         response = await self.client.get('/demo')
@@ -76,6 +76,19 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()['username'], 'updated_user')
         self.assertEqual((await self.client.post('/auth/logout')).status_code, 204)
         self.assertEqual((await self.client.get('/profile')).status_code, 401)
+
+    async def test_optional_profile_inn_can_be_added_changed_and_removed(self):
+        await self.register()
+        await self.client.post('/auth/login', data={'username': 'demo@example.com', 'password': 'test-password-123'})
+        self.assertIsNone((await self.client.get('/users/me')).json()['inn'])
+        for value, expected in [('7707083893', '7707083893'), ('7701234560', '7701234560'), ('', None), (None, None)]:
+            response = await self.client.patch('/users/me', json={'inn': value})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()['inn'], expected)
+            self.assertEqual((await self.client.get('/users/me')).json()['inn'], expected)
+        response = await self.client.patch('/users/me', json={'inn': '0000000001'})
+        self.assertEqual(response.status_code, 422)
+        self.assertIsNone((await self.client.get('/users/me')).json()['inn'])
 
     async def test_reset_password_from_email_link(self):
         await self.register()

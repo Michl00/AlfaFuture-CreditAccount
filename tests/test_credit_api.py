@@ -15,7 +15,7 @@ OFFERS = credit.GeneratedOffers(offers=[
     {'product': 'equipment', 'name': 'Более посильный платёж', 'amount': 1000000, 'months': 36,
      'rate': 22.9, 'reason': 'Меньше сумма и больше срок', 'conservative': True},
 ])
-READY = credit.RiskResult(status='ready', risk='low', approval_probability=0.8,
+READY = credit.RiskResult(risk='low',
     reasons=['Дохода достаточно для платежа'], terms={'amount': 1500000, 'months': 24, 'rate': 24.9})
 
 
@@ -70,6 +70,28 @@ class CreditAPITests(unittest.IsolatedAsyncioTestCase):
         payload['consent'] = False
         self.assertEqual((await self.client.post('/credit/confirm', json=payload)).status_code, 422)
 
+    async def test_risk_assessment_without_decision_or_corrections_uses_selected_terms(self):
+        _, data = await self.prepare()
+        answer = credit.RiskResult(risk='high', reasons=['Требуется внимание сотрудника'])
+        result = await self.assess(data, answer)
+        self.assertEqual(result.status_code, 200, result.text)
+        assessment = result.json()
+        self.assertEqual(assessment['status'], 'ready')
+        self.assertEqual(assessment['terms']['amount'], data['amount'])
+        self.assertTrue(assessment['score']['manual_review'])
+        response = await self.client.post('/credit/confirm', json={
+            'assessment_token': assessment['assessment_token'], 'data': data, 'consent': True})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['status'], 'bank_review')
+        self.assertEqual(response.json()['ai_reasons'], answer.reasons)
+
+    async def test_model_can_request_information_without_corrected_terms(self):
+        _, data = await self.prepare()
+        answer = credit.RiskResult(risk='medium', needs_info=True, reasons=['Уточните источники выручки'])
+        result = (await self.assess(data, answer)).json()
+        self.assertEqual(result['status'], 'needs_info')
+        self.assertIsNone(result['assessment_token'])
+
     async def test_financial_changes_invalidate_assessment(self):
         _, data = await self.prepare()
         result = (await self.assess(data)).json()
@@ -85,9 +107,9 @@ class CreditAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()['status'], 'blocked')
         self.assertIsNone(response.json()['assessment_token'])
 
-    async def test_extremely_low_model_probability_blocks_financially_affordable_case(self):
+    async def test_critical_risk_blocks_financially_affordable_case(self):
         _, data = await self.prepare()
-        answer = READY.model_copy(update={'approval_probability': 0.05})
+        answer = READY.model_copy(update={'risk': 'critical'})
         result = (await self.assess(data, answer)).json()
         self.assertEqual(result['status'], 'blocked')
         self.assertIsNone(result['assessment_token'])
@@ -159,6 +181,19 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(requests[0].url), 'https://api.cometapi.com/v1/chat/completions')
         self.assertEqual(requests[0].headers['Authorization'], 'Bearer test-only-key')
         self.assertEqual(json.loads(requests[0].content)['model'], 'configured-qwen-id')
+
+    async def test_risk_response_does_not_require_decision_probability_or_terms(self):
+        body = {'risk': 'medium', 'reasons': ['Условия требуют проверки сотрудником']}
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
+            json={'choices': [{'message': {'content': json.dumps(body)}}]})))
+        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+            answer = await credit.ask_model('Оцени риски', {}, credit.RiskResult)
+        self.assertEqual(answer.risk, 'medium')
+        self.assertIsNone(answer.terms)
+        self.assertFalse(answer.needs_info)
+        properties = credit.RiskResult.model_json_schema()['properties']
+        self.assertNotIn('status', properties)
+        self.assertNotIn('approval_probability', properties)
 
     async def test_malformed_model_output_is_rejected_without_leaking_raw_text(self):
         for body in [{'choices': [{'message': {'content': 'not json'}}]}, {'choices': []}]:

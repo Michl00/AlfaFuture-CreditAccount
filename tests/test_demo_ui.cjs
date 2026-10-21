@@ -342,7 +342,8 @@ test('successful registration logs in and resumes the application with no guest 
   }});
   ui.click('[data-action="apply"]');
   ui.click('#application-dialog [data-action="register"]');
-  for (const [name, value] of Object.entries({email: 'new@example.com', password: 'secret-password', username: 'Новый', inn: '7701234560'})) ui.set(`account-${name}`, value);
+  for (const [name, value] of Object.entries({email: 'new@example.com', password: 'secret-password', username: 'Новый'})) ui.set(`account-${name}`, value);
+  assert.equal(ui.get('account-inn'), null);
   await ui.submit('account-form');
   assert.equal(ui.get('account-dialog').open, false);
   assert.equal(ui.get('application-dialog').open, true);
@@ -462,7 +463,7 @@ test('bank cabinet shows scoring and sends an explicit versioned decision', asyn
   const check = {source: 'БКИ', mock: true, status: 'warning', summary: 'Просрочка (мок)', data: {overdue_days: 45}};
   let item = {...sample, id: 'application-fixture', status: 'bank_review', version: 1, assigned_to: null, goal: 'Закупка', rate: 24.9, createdAt: Date.now(), updatedAt: Date.now(), applicant: {username: 'Клиент', email: 'client@example.com'}, documents: [], events: [], ai_reasons: ['Платёж посилен'], checks: {registry: check, bki: check, transparent: check, documents: check}, score: {value: 800, risk: 'medium', parts: {financial: 400}, manual_review: true, manual_reasons: ['Просрочка'], method: 'Моки'}};
   const ui = await setup(t, {bank: true, fetch: async (url, options) => {
-    if (url === '/bank/me') return new Response(JSON.stringify({id: 1, username: 'Сотрудник'}));
+    if (url === '/bank/me') return new Response(JSON.stringify({id: 1, username: 'Сотрудник', role: 'bank_employee'}));
     if (url.startsWith('/bank/applications?')) return new Response(JSON.stringify({items: [item], has_more: false}));
     if (url.endsWith('/actions')) {
       const action = JSON.parse(options.body);
@@ -511,4 +512,54 @@ test('slow AI requests allow the server deadline and prevent duplicate submissio
   await tick(); await tick();
   assert.equal(ui.get('wizard-next').disabled, false);
   assert.ok(ui.get('wizard-fields').querySelector('[data-offer]'));
+});
+
+
+test('profile offers optional INN editing and clearing', async t => {
+  let profile = {id: 1, username: 'Тест', email: 'test@example.com', inn: null};
+  const ui = await setup(t, {fetch: async (url, options) => {
+    if (url === '/users/me' && options.method === 'PATCH') {
+      const data = JSON.parse(options.body);
+      profile = {...profile, inn: data.inn || null};
+    }
+    return new Response(JSON.stringify(profile));
+  }});
+  ui.click('[data-page="profile"]');
+  assert.match(ui.get('profile-content').textContent, /необязательно/);
+  ui.click('[data-action="edit-inn"]');
+  assert.equal(ui.get('account-inn').required, false);
+  ui.set('account-inn', '7701234560');
+  await ui.submit('account-form');
+  assert.match(ui.get('profile-content').textContent, /7701234560/);
+  ui.click('[data-action="edit-inn"]');
+  assert.equal(ui.get('account-inn').value, '7701234560');
+  ui.set('account-inn', '');
+  await ui.submit('account-form');
+  assert.match(ui.get('profile-content').textContent, /Не указан/);
+});
+
+
+test('employee has only bank cabinet and profile without client actions or INN', async t => {
+  const ui = await setup(t, {bank: true, fetch: async (url, options) => {
+    if (url === '/bank/me') return new Response(JSON.stringify({id: 1, role: 'bank_employee'}));
+    if (url.startsWith('/bank/applications?')) return new Response(JSON.stringify({items: [], has_more: false}));
+    return new Response(JSON.stringify({id: 1, username: 'Сотрудник', email: 'staff@example.com', inn: '7701234560'}));
+  }});
+  await tick();
+  assert.equal(ui.get('bank-page').hidden, false);
+  const visible = [...ui.window.document.querySelectorAll('.nav-item')].filter(item => !item.hidden).map(item => item.dataset.page);
+  assert.deepEqual(visible.sort(), ['bank', 'profile']);
+  ui.click('[data-page="profile"]');
+  assert.equal(ui.get('profile-content').querySelector('[data-action="edit-inn"]'), null);
+  assert.equal(ui.get('profile-applications'), null);
+  assert.doesNotMatch(ui.get('profile-content').textContent, /ИНН|7701234560/);
+  ui.click('[data-action="edit-profile"]');
+  ui.set('account-username', 'Сотрудник');
+  await ui.submit('account-form');
+  assert.equal(ui.get('profile-content').querySelector('[data-action="edit-inn"]'), null);
+  ui.click('[data-action="apply"]');
+  assert.equal(ui.get('application-dialog').open, false);
+  assert.equal(ui.get('bank-page').hidden, false);
+  assert.equal(ui.state(), null);
+  assert.equal(ui.calls.filter(([url]) => url === '/credit/applications').length, 0);
 });
