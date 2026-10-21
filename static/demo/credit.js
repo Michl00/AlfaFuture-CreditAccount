@@ -30,19 +30,39 @@
     if (!Number.isInteger(Number(data.age)) || Number(data.age) > 1200) return 'Укажите возраст бизнеса в полных месяцах (до 1200).';
     return null;
   }
+  const goalSuggestions = ['Закупка товаров', 'Покупка оборудования', 'Открытие новой точки', 'Ремонт помещения', 'Пополнение оборотных средств', 'Покрытие кассового разрыва'];
+  function goalCategory(goal) {
+    const value = String(goal).toLowerCase();
+    if (/кассов|разрыв|сезон|краткоср|коротк|flex/.test(value)) return 'flex';
+    if (/оборуд|развит|точк|ремонт|строит|помещ|автомоб|станок|производ|расшир|equipment/.test(value)) return 'equipment';
+    return 'working';
+  }
+  function approvalEstimate(data) {
+    const product = products.find(p => p.id === data.product);
+    if (!product || ['revenue', 'expenses', 'debt'].some(key => data[key] === '' || data[key] === undefined || !Number.isFinite(Number(data[key])) || Number(data[key]) < 0) || Number(data.revenue) <= 0 || Number(data.amount) <= 0 || Number(data.months) <= 0) {
+      return {level: 'unknown', label: 'Добавьте доходы и расходы', score: 0};
+    }
+    const available = (Number(data.revenue) - Number(data.expenses)) * 0.5 - Number(data.debt);
+    const monthly = payment(Number(data.amount), Number(data.months), product.rate);
+    const ratio = available / monthly;
+    const level = ratio < 1 ? 'low' : ratio < 1.25 || data.age !== '' && Number(data.age) < 6 ? 'medium' : 'high';
+    const label = {low: 'Низкая', medium: 'Средняя', high: 'Высокая'}[level];
+    return {level, label, score: level === 'high' ? 90 : level === 'medium' ? 60 : Math.max(8, Math.min(35, ratio * 35)), monthly};
+  }
   function validateRequest(data) {
-    if (!products.some(p => p.id === data.goal)) return 'Укажите цель финансирования.';
+    if (typeof data.goal !== 'string' || data.goal.trim().length < 3 || data.goal.trim().length > 500) return 'Опишите цель кредита: от 3 до 500 символов.';
     if (!Number.isFinite(Number(data.requestedAmount)) || Number(data.requestedAmount) < 100000 || Number(data.requestedAmount) > 10000000) return 'Укажите сумму от 100 000 до 10 000 000 ₽.';
     if (!Number.isInteger(Number(data.requestedMonths)) || Number(data.requestedMonths) < 6 || Number(data.requestedMonths) > 60) return 'Укажите срок от 6 до 60 месяцев.';
     return null;
   }
   function recommend(data) {
     if (validateRequest(data)) throw new Error('Invalid financing request');
-    return [...products].sort((a, b) => Number(b.id === data.goal) - Number(a.id === data.goal)).map((product, index) => {
+    const category = goalCategory(data.goal);
+    return [...products].sort((a, b) => Number(b.id === category) - Number(a.id === category)).map((product, index) => {
       const amount = Math.min(Number(data.requestedAmount), product.max);
       const months = Math.min(Number(data.requestedMonths), product.months);
       return {product: product.id, amount, months, rate: product.rate, payment: payment(amount, months, product.rate), recommended: index === 0,
-        reason: product.id === data.goal ? 'Соответствует вашей цели финансирования.' : product.description,
+        reason: product.id === category ? 'Соответствует вашей цели финансирования.' : product.description,
         limited: amount !== Number(data.requestedAmount) || months !== Number(data.requestedMonths)};
     });
   }
@@ -71,7 +91,7 @@
   }
   // Replace this boundary with server-backed recommendations/assessment when CometAPI is connected.
   const advisor = {recommend, assess};
-  const api = {products, payment, validInn, validate, validateRequest, advisor};
+  const api = {products, payment, validInn, validate, validateRequest, advisor, goalSuggestions, approvalEstimate};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.CreditFlow = api;
 })(typeof window === 'undefined' ? globalThis : window);
