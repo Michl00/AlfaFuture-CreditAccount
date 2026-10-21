@@ -1,4 +1,5 @@
 """Authenticated AI advice; the bank itself is not connected."""
+import asyncio
 import hashlib
 import json
 import logging
@@ -174,8 +175,9 @@ async def ask_model(task, payload, schema):
         {'role': 'system', 'content': system},
         {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
     ], 'temperature': 0.2, 'max_tokens': 3500, 'response_format': {'type': 'json_object'}}
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(45, connect=10), follow_redirects=False) as client:
+    async def request_completion():
+        async with httpx.AsyncClient(timeout=httpx.Timeout(config.comet.timeout_seconds,
+                connect=20, write=20, pool=10), follow_redirects=False) as client:
             response = await client.post('https://api.cometapi.com/v1/chat/completions',
                 headers={'Authorization': f'Bearer {config.comet.api_key}'},
                 json=request_body)
@@ -194,6 +196,12 @@ async def ask_model(task, payload, schema):
                     request_body.pop('response_format')
                     response = await client.post('https://api.cometapi.com/v1/chat/completions',
                         headers={'Authorization': f'Bearer {config.comet.api_key}'}, json=request_body)
+            return response
+
+    started = time.monotonic()
+    try:
+        # One total deadline includes connection and a possible JSON-mode retry.
+        response = await asyncio.wait_for(request_completion(), timeout=config.comet.timeout_seconds)
         response.raise_for_status()
         choice = response.json()['choices'][0]
         if choice.get('finish_reason') == 'length':
@@ -216,8 +224,11 @@ async def ask_model(task, payload, schema):
             422: 'CREDIT_AI_REQUEST_REJECTED'}.get(status, 'CREDIT_AI_UNAVAILABLE')
         logger.warning('CometAPI failure reason=%s upstream_status=%s model=%s', detail, status, config.comet.model)
         raise HTTPException(502, detail) from None
-    except httpx.TimeoutException:
-        logger.warning('CometAPI failure reason=timeout model=%s', config.comet.model)
+    except (httpx.TimeoutException, asyncio.TimeoutError) as error:
+        phase = next((name for kind, name in ((httpx.ConnectTimeout, 'connect'), (httpx.ReadTimeout, 'read'),
+            (httpx.WriteTimeout, 'write'), (httpx.PoolTimeout, 'pool')) if isinstance(error, kind)), 'total')
+        logger.warning('CometAPI failure reason=timeout phase=%s elapsed_seconds=%.1f limit_seconds=%s model=%s',
+            phase, time.monotonic() - started, config.comet.timeout_seconds, config.comet.model)
         raise HTTPException(504, 'CREDIT_AI_TIMEOUT') from None
     except httpx.RequestError:
         logger.warning('CometAPI failure reason=connection_error model=%s', config.comet.model)

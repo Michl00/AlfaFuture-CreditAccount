@@ -253,7 +253,7 @@ function renderWizard() {
   if (wizardStep === 0) {
     $('wizard-fields').innerHTML = `<div class="field"><label for="app-goal">Для чего нужны деньги?</label><input id="app-goal" name="goal" value="${escapeHTML(draft.goal)}" list="goal-options" minlength="3" maxlength="500" placeholder="Например, открыть кофейню и купить оборудование" required><datalist id="goal-options">${goalSuggestions.map(goal => `<option value="${escapeHTML(goal)}"></option>`).join('')}</datalist><p class="field-hint">Опишите цель своими словами или выберите подсказку.</p></div><div class="goal-suggestions" aria-label="Примеры целей кредита">${goalSuggestions.map(goal => `<button type="button" data-goal="${escapeHTML(goal)}">${escapeHTML(goal)}</button>`).join('')}</div><div class="form-grid">${field('requestedAmount', 'Сколько нужно, ₽', {min: 100000, max: 10000000})}${field('requestedMonths', 'На какой срок, месяцев', {type: 'number', min: 6, max: 60, step: 1})}</div><p class="muted">Сначала подберём варианты под ваши планы. Сведения о компании понадобятся после выбора.</p>`;
   } else if (wizardStep === 1 && assessmentBusy) {
-    $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем варианты под вашу цель</h3></div>';
+    $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем варианты под вашу цель</h3><p>Подбор может занять несколько минут. Дождитесь результата.</p></div>';
   } else if (wizardStep === 1) {
     if (!draft.offers?.length) $('wizard-next').innerHTML = 'Повторить подбор <span>→</span>';
     $('wizard-fields').innerHTML = `<p class="muted">Варианты под запрос ${money(Number(draft.requestedAmount))} на ${draft.requestedMonths} мес. Выберите один, чтобы продолжить.</p><div class="offers-list">${offerCards()}</div><p class="small-note">Предварительные условия. После оценки бизнеса они могут измениться.</p>`;
@@ -261,7 +261,7 @@ function renderWizard() {
     const product = products.find(p => p.id === draft.product);
     $('wizard-fields').innerHTML = `<div class="info-banner"><p>Выбрано: <strong>${product.name}</strong> · ${money(Number(draft.amount))} на ${draft.months} мес.</p></div><div class="section-heading"><p class="muted">Расскажите о компании, чтобы оценить условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div>${documentUploadSection()}<div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {min: 0, max: 1000000000})}${field('debt', 'Платежи по кредитам, ₽/мес.', {min: 0, max: 1000000000})}${field('age', 'Возраст бизнеса, месяцев', {type: 'number', min: 0, max: 1200, step: 1})}</div><div id="approval-indicator" class="approval-indicator" aria-live="polite"></div><p class="field-hint">Индикатор — предварительная расчётная оценка. Далее условия проверит ИИ.</p>`;
   } else if (assessmentBusy) {
-    $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем посильные условия</h3><p>Учитываем доходы, расходы и действующие обязательства компании.</p></div>';
+    $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем посильные условия</h3><p>Учитываем доходы, расходы и действующие обязательства компании. Оценка может занять несколько минут.</p></div>';
   } else {
     const assessment = draft.assessment;
     if (!assessment) {
@@ -486,7 +486,10 @@ function errorMessage(data, mode) {
 }
 async function api(path, method = 'GET', payload, form = false) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), path.startsWith('/credit/') ? 60000 : 20000);
+  // Longer than the maximum server AI deadline (300 s); other operations keep
+  // their existing limits. A JSON-mode retry shares the server deadline.
+  const aiRequest = ['/credit/recommendations', '/credit/assessments'].includes(path);
+  const timeout = setTimeout(() => controller.abort(), aiRequest ? 330000 : path.startsWith('/credit/') ? 60000 : 20000);
   try {
     const response = await fetch(path, {method, credentials: 'same-origin', headers: payload ? {'Content-Type': form ? 'application/x-www-form-urlencoded' : 'application/json'} : {}, body: payload ? (form ? new URLSearchParams(payload) : JSON.stringify(payload)) : undefined, signal: controller.signal});
     const text = await response.text();

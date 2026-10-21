@@ -36,10 +36,12 @@ async function setup(t, options = {}) {
   const calls = [];
   const clock = {value: 1800000000000};
   const pendingAssessments = new Map();
+  const timerDelays = [];
   let timerId = 100000;
   const realSetTimeout = window.setTimeout.bind(window);
   const realClearTimeout = window.clearTimeout.bind(window);
   window.setTimeout = (callback, delay, ...args) => {
+    timerDelays.push(delay);
     if (delay === 800) {const id = timerId++; pendingAssessments.set(id, callback); return id;}
     return realSetTimeout(callback, delay, ...args);
   };
@@ -78,7 +80,7 @@ async function setup(t, options = {}) {
     await tick();
   };
   const state = key => JSON.parse(window.localStorage.getItem(key || 'credit-cabinet-v1:1'));
-  return {window, calls, clock, get, click, set, submit, advance, finishAssessment, state};
+  return {window, calls, clock, get, click, set, submit, advance, finishAssessment, state, timerDelays};
 }
 async function prepareTerms(ui, overrides = {}) {
   ui.click('[data-action="apply"]');
@@ -491,4 +493,22 @@ test('bank menu stays hidden for an ordinary client', async t => {
   const ui = await setup(t, {bank: true, fetch: async url => url === '/bank/me' ? new Response('{}', {status: 403}) : new Response(JSON.stringify({id: 1, username: 'Клиент'}))});
   await tick();
   assert.equal(ui.get('bank-menu').hidden, true);
+});
+
+test('slow AI requests allow the server deadline and prevent duplicate submission', async t => {
+  let resolveOffers;
+  const waiting = new Promise(resolve => {resolveOffers = resolve;});
+  const ui = await setup(t, {creditFetch: async (url, options) => url === '/credit/recommendations' ? waiting : undefined});
+  ui.click('[data-action="apply"]');
+  ui.set('app-goal', 'Закупка оборудования');
+  await ui.submit('application-form');
+  assert.equal(ui.get('wizard-next').disabled, true);
+  assert.match(ui.get('wizard-fields').textContent, /может занять несколько минут/);
+  assert.ok(ui.timerDelays.includes(330000));
+  await ui.submit('application-form');
+  assert.equal(ui.calls.filter(([url]) => url === '/credit/recommendations').length, 1);
+  resolveOffers(mockCredit('/credit/recommendations', {body: JSON.stringify({requestedAmount: 1500000, requestedMonths: 24})}));
+  await tick(); await tick();
+  assert.equal(ui.get('wizard-next').disabled, false);
+  assert.ok(ui.get('wizard-fields').querySelector('[data-offer]'));
 });
