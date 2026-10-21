@@ -12,6 +12,8 @@ from services.db import User, create_db_and_tables
 from services.schemas import UserCreate, UserRead, UserUpdate
 from services.users import auth_backend, current_active_user, fastapi_users
 from services.credit_api import router as credit_router
+from services.bank import router as bank_router, client_router as applications_router
+from services.documents import router as documents_router
 
 config: Config = load_config()
 
@@ -33,6 +35,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(credit_router)
+app.include_router(bank_router)
+app.include_router(applications_router)
+app.include_router(documents_router)
 demo_directory = Path(__file__).resolve().parent / "static" / "demo"
 app.mount("/demo/assets", StaticFiles(directory=demo_directory), name="demo-assets")
 

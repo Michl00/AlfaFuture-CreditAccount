@@ -12,13 +12,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from config.config import load_config
-from services.db import User
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
+from services.db import User, CreditAssessment, CreditApplication, ApplicationEvent, get_async_session
+from services.checks import run_checks
+from services.documents import owned_documents
+from services.bank import application_view
 from services.services import valid_inn
 from services.users import current_active_user
 
 config = load_config()
 router = APIRouter(prefix='/credit', tags=['credit'])
 ActiveUser = Annotated[User, Depends(current_active_user)]
+Session = Annotated[AsyncSession, Depends(get_async_session)]
 logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 CATALOG = {
@@ -89,6 +95,7 @@ class AssessmentInput(StrictModel):
     debt: int = Field(ge=0, le=1000000000)
     age: int = Field(ge=0, le=1200)
     clarification: str = Field(default='', max_length=2000)
+    document_ids: list[str] = Field(default_factory=list, max_length=5)
 
     @field_validator('company')
     @classmethod
@@ -204,10 +211,29 @@ async def recommend(data: FinancingRequest, user: ActiveUser):
 
 
 @router.post('/assessments')
-async def assess(data: AssessmentInput, user: ActiveUser):
+async def assess(data: AssessmentInput, user: ActiveUser, session: Session):
     context, offer = selected_context(data, user.id)
-    # Only financial figures and purpose leave the server; names, INN and email do not.
-    financial = data.model_dump(exclude={'recommendation_token', 'offer_id', 'company', 'inn'})
+    documents = await owned_documents(session, user.id, data.document_ids)
+    original = {'amount': data.amount, 'months': offer['months'], 'rate': offer['rate']}
+    checks, initial_score = run_checks(data.model_dump(), original, documents)
+    async def save_result(result, terms=None):
+        payload = {**data.model_dump(exclude={'recommendation_token'}), **original,
+            'goal': context['request']['goal'], 'product': offer['product']}
+        score_data = {**data.model_dump(), 'ai_risk': result['risk']}
+        _, score = run_checks(score_data, terms or original, documents)
+        result = {**result, 'checks': checks, 'score': score}
+        record = CreditAssessment(id=str(uuid4()), user_id=user.id, fingerprint=fingerprint(data),
+            payload=payload, result=result, created_at=int(time.time() * 1000))
+        session.add(record)
+        await session.commit()
+        return result, record
+    if initial_score['hard_stop']:
+        result, _ = await save_result({'status': 'blocked', 'risk': 'critical',
+            'reasons': ['Мок реестра: деятельность компании прекращена. Отправка недоступна.'],
+            'terms': None, 'assessment_token': None})
+        return result
+    # Identifying fields and document contents are not forwarded to the model.
+    financial = data.model_dump(exclude={'recommendation_token', 'offer_id', 'company', 'inn', 'document_ids'})
     answer = await ask_model(
         'Оцени риски по выбранному варианту и финансовым данным. Доступный платёж: '
         '0.5 * (выручка - расходы) - действующие платежи. При необходимости уменьши сумму, '
@@ -215,8 +241,10 @@ async def assess(data: AssessmentInput, user: ActiveUser):
         'должен быть посильным. При крайне низкой вероятности (<0.15) или невозможности '
         'подобрать условия верни blocked, без разрешения отправки. Для возраста <6 месяцев '
         'без содержательного уточнения верни needs_info. Вероятность является лишь оценкой модели. '
+        'Результаты external_checks являются синтетическими моками, не реальными проверками. '
+        'Учитывай предупреждения и расхождения документов, нестандартные случаи требуют сотрудника. '
         'Каталог: ' + json.dumps(CATALOG),
-        {'original_request': context['request'], 'selected_offer': offer, 'company_financials': financial}, RiskResult)
+        {'original_request': context['request'], 'selected_offer': offer, 'company_financials': financial, 'external_checks': checks, 'scoring': initial_score}, RiskResult)
     original = {'amount': data.amount, 'months': offer['months'], 'rate': offer['rate']}
     terms = answer.terms.model_dump() if answer.terms else None
     if terms and (terms['amount'] > min(data.amount, CATALOG[offer['product']]['max']) or terms['months'] > CATALOG[offer['product']]['months']):
@@ -225,18 +253,22 @@ async def assess(data: AssessmentInput, user: ActiveUser):
     if terms and capacity_ratio(data, terms) < 1:
         blocked = True
     if blocked:
-        return {'status': 'blocked', 'risk': 'critical', 'reasons': ['Слишком низкие шансы на согласование. Измените сумму, срок или финансовые данные.'], 'terms': None, 'assessment_token': None}
+        result, _ = await save_result({'status': 'blocked', 'risk': 'critical', 'reasons': ['Слишком низкие шансы на согласование. Измените сумму, срок или финансовые данные.'], 'terms': None, 'assessment_token': None})
+        return result
     if answer.status == 'needs_info' or data.age < 6 and len(data.clarification.strip()) < 20:
-        return {'status': 'needs_info', 'risk': answer.risk, 'reasons': answer.reasons, 'terms': None, 'assessment_token': None}
+        result, _ = await save_result({'status': 'needs_info', 'risk': answer.risk, 'reasons': answer.reasons, 'terms': None, 'assessment_token': None})
+        return result
     if answer.status != 'ready' or terms is None:
         raise HTTPException(502, 'CREDIT_AI_INVALID_TERMS')
-    signed = sign({'fingerprint': fingerprint(data), 'terms': terms, 'risk': answer.risk}, user.id, 'credit-assessment')
-    return {'status': 'ready', 'risk': answer.risk, 'reasons': answer.reasons,
-            'terms': {**terms, 'payment': monthly_payment(**terms)}, 'assessment_token': signed}
+    result, record = await save_result({'status': 'ready', 'risk': answer.risk, 'reasons': answer.reasons,
+        'terms': {**terms, 'payment': monthly_payment(**terms)}}, terms)
+    signed = sign({'fingerprint': fingerprint(data), 'terms': terms, 'risk': answer.risk,
+        'assessment_id': record.id}, user.id, 'credit-assessment')
+    return {**result, 'assessment_token': signed}
 
 
 @router.post('/confirm')
-async def confirm(data: Confirmation, user: ActiveUser):
+async def confirm(data: Confirmation, user: ActiveUser, session: Session):
     proof = verify(data.assessment_token, user.id, 'credit-assessment')
     context, offer = selected_context(data.data, user.id)
     if proof['fingerprint'] != fingerprint(data.data):
@@ -244,5 +276,27 @@ async def confirm(data: Confirmation, user: ActiveUser):
     original = {'amount': data.data.amount, 'months': offer['months'], 'rate': offer['rate']}
     if proof['risk'] == 'critical' or capacity_ratio(data.data, original) < 0.3 or capacity_ratio(data.data, proof['terms']) < 1:
         raise HTTPException(422, 'CREDIT_CHANCE_TOO_LOW')
-    return {'id': proof['jti'], 'status': 'bank_review', 'createdAt': int(time.time() * 1000),
-            'goal': context['request']['goal'], 'product': offer['product'], **proof['terms']}
+    record = await session.get(CreditAssessment, proof.get('assessment_id', ''))
+    if record is None or record.user_id != user.id or record.result['status'] != 'ready' or record.fingerprint != proof['fingerprint']:
+        raise HTTPException(409, 'CREDIT_ADVICE_EXPIRED')
+    existing = await session.get(CreditApplication, proof['jti'])
+    if existing is not None:
+        return application_view(existing)
+    now = int(time.time() * 1000)
+    payload = {**record.payload, **proof['terms'], 'ai_risk': record.result['risk'],
+        'ai_reasons': record.result['reasons'], 'agreedAt': now}
+    application = CreditApplication(id=proof['jti'], assessment_id=record.id, user_id=user.id,
+        status='bank_review', version=1, payload=payload, checks=record.result['checks'], score=record.result['score'],
+        created_at=now, updated_at=now)
+    session.add(application)
+    try:
+        await session.flush()
+        session.add(ApplicationEvent(id=str(uuid4()), application_id=application.id, actor_id=user.id,
+            action='submit', comment='Клиент согласовал условия и отправил заявку', created_at=now))
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        existing = await session.get(CreditApplication, proof['jti'])
+        if existing is None: raise HTTPException(409, 'APPLICATION_CHANGED') from None
+        return application_view(existing)
+    return application_view(application)

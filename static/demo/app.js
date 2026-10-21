@@ -24,8 +24,8 @@ function formatMoneyInput(input) {
   input.setCustomValidity(invalid ? `Укажите сумму от ${money(Number(input.dataset.min))} до ${money(Number(input.dataset.max))}.` : '');
 }
 const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[char]));
-const statusNames = {bank_review: 'Ожидает подтверждения банка', draft: 'Черновик', review: 'На рассмотрении', needs_info: 'Нужны уточнения', approved: 'Одобрено', alternative: 'Есть предложение', declined: 'Не одобрено', accepted: 'Условия приняты'};
-const finished = ['declined', 'accepted'];
+const statusNames = {in_review: 'Сотрудник рассматривает', rejected: 'Отказ', bank_review: 'Ожидает подтверждения банка', draft: 'Черновик', review: 'На рассмотрении', needs_info: 'Нужны уточнения', approved: 'Одобрено сотрудником', alternative: 'Есть предложение', declined: 'Не одобрено', accepted: 'Условия приняты'};
+const finished = ['declined', 'accepted', 'approved', 'rejected'];
 let user = null;
 let currentPage = 'home';
 let filter = 'all';
@@ -65,6 +65,7 @@ function persist() {
   $('draft-status').textContent = storageAvailable ? 'Черновик сохранён на этом устройстве' : 'Изменения доступны до закрытия вкладки';
 }
 function loadWorkspace() {
+  window.dispatchEvent(new CustomEvent('cabinet-auth'));
   adviceVersion += 1;
   clearTimeout(saveTimer);
   assessmentBusy = false;
@@ -87,9 +88,10 @@ function loadWorkspace() {
     if (Array.isArray(saved.applications)) applications = saved.applications.filter(item => item && typeof item.id === 'string' && !validate(item) && Object.hasOwn(statusNames, item.status) && item.status !== 'draft' && Number.isFinite(item.createdAt)).slice(0, 100);
   } catch { notify('Не удалось восстановить сохранённые заявки. Можно начать новую.'); }
   renderAll();
+  refreshApplications();
 }
 function emptyDraft() {
-  return {goal: '', requestedAmount: 1500000, requestedMonths: 24, selectedOffer: null, stage: 0, product: 'working', amount: 1500000, months: 24, company: '', inn: '', revenue: '', expenses: '', debt: 0, age: '', clarification: ''};
+  return {goal: '', requestedAmount: 1500000, requestedMonths: 24, selectedOffer: null, stage: 0, product: 'working', amount: 1500000, months: 24, company: '', inn: '', revenue: '', expenses: '', debt: 0, age: '', clarification: '', document_ids: [], documents: []};
 }
 function navigate(page) {
   currentPage = page;
@@ -102,6 +104,8 @@ function navigate(page) {
     else button.removeAttribute('aria-current');
   }
   if (page === 'profile') renderProfile();
+  if (page === 'profile' || page === 'applications') refreshApplications();
+  if (page === 'bank') window.dispatchEvent(new CustomEvent('bank-open'));
   $('main').focus({preventScroll: true});
   window.scrollTo({top: 0, behavior: 'instant'});
 }
@@ -203,7 +207,7 @@ function assessmentPayload() {
   return {recommendation_token: draft.recommendation_token, offer_id: draft.selectedOffer,
     amount: Number(draft.amount), company: draft.company, inn: draft.inn,
     revenue: Number(draft.revenue), expenses: Number(draft.expenses), debt: Number(draft.debt),
-    age: Number(draft.age), clarification: draft.clarification || ''};
+    age: Number(draft.age), clarification: draft.clarification || '', document_ids: draft.document_ids || []};
 }
 async function requestOffers() {
   assessmentBusy = true;
@@ -245,7 +249,7 @@ function renderWizard() {
     $('wizard-fields').innerHTML = `<p class="muted">Варианты под запрос ${money(Number(draft.requestedAmount))} на ${draft.requestedMonths} мес. Выберите один, чтобы продолжить.</p><div class="offers-list">${offerCards()}</div><p class="small-note">Предварительные условия. После оценки бизнеса они могут измениться.</p>`;
   } else if (wizardStep === 2) {
     const product = products.find(p => p.id === draft.product);
-    $('wizard-fields').innerHTML = `<div class="info-banner"><p>Выбрано: <strong>${product.name}</strong> · ${money(Number(draft.amount))} на ${draft.months} мес.</p></div><div class="section-heading"><p class="muted">Расскажите о компании, чтобы оценить условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div><div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {min: 0, max: 1000000000})}${field('debt', 'Платежи по кредитам, ₽/мес.', {min: 0, max: 1000000000})}${field('age', 'Возраст бизнеса, месяцев', {type: 'number', min: 0, max: 1200, step: 1})}</div><div id="approval-indicator" class="approval-indicator" aria-live="polite"></div><p class="field-hint">Индикатор — предварительная расчётная оценка. Далее условия проверит ИИ.</p>`;
+    $('wizard-fields').innerHTML = `<div class="info-banner"><p>Выбрано: <strong>${product.name}</strong> · ${money(Number(draft.amount))} на ${draft.months} мес.</p></div><div class="section-heading"><p class="muted">Расскажите о компании, чтобы оценить условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div>${documentUploadSection()}<div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {min: 0, max: 1000000000})}${field('debt', 'Платежи по кредитам, ₽/мес.', {min: 0, max: 1000000000})}${field('age', 'Возраст бизнеса, месяцев', {type: 'number', min: 0, max: 1200, step: 1})}</div><div id="approval-indicator" class="approval-indicator" aria-live="polite"></div><p class="field-hint">Индикатор — предварительная расчётная оценка. Далее условия проверит ИИ.</p>`;
   } else if (assessmentBusy) {
     $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем посильные условия</h3><p>Учитываем доходы, расходы и действующие обязательства компании.</p></div>';
   } else {
@@ -386,17 +390,48 @@ $('wizard-back').addEventListener('click', () => {
   draft.assessment = null;
   moveToStep(Math.max(0, wizardStep - 1));
 });
-function openDetail(id) { if (!user) {pendingApplication = {}; showRegistrationStep(); return;} detailId = id; renderDetail(); showDialog('detail-dialog'); }
+async function refreshApplications() {
+  if (!user) return;
+  const ownerId = user.id;
+  try {
+    const result = await api('/credit/applications');
+    if (user?.id !== ownerId || !result.ok || !Array.isArray(result.data)) return;
+    applications = result.data;
+    persist(); renderApplications();
+    if (currentPage === 'profile') renderProfile();
+  } catch { /* Keep the last known cache until the user refreshes. */ }
+}
+let clarificationDocuments = [];
+async function openDetail(id) {
+  if (!user) {pendingApplication = {}; showRegistrationStep(); return;}
+  const ownerId = user.id;
+  detailId = id;
+  clarificationDocuments = [];
+  $('detail-content').textContent = 'Загружаем заявку…';
+  showDialog('detail-dialog');
+  try {
+    const result = await api('/credit/applications/' + encodeURIComponent(id));
+    if (!result.ok) throw new Error('APPLICATION_UNAVAILABLE');
+    if (user?.id === ownerId && detailId === id) {
+      const index = applications.findIndex(item => item.id === id);
+      if (index >= 0) applications[index] = result.data;
+      renderDetail(); persist();
+    }
+  } catch { if (user?.id === ownerId && detailId === id) {renderDetail(); notify('Не удалось обновить заявку. Попробуйте ещё раз.');} }
+}
 function renderDetail() {
   const item = applications.find(a => a.id === detailId);
   if (!item) return;
   $('detail-title').textContent = `Заявка № ${item.id}`;
-  const current = item.status === 'bank_review';
-  $('detail-content').innerHTML = `<span class="status ${item.status}">${statusNames[item.status]}</span><p class="detail-intro">${current ? 'Вы согласовали условия. Заявка направлена на подтверждение банка. До его решения условия остаются предварительными.' : 'Эта заявка сохранена в предыдущем демонстрационном сценарии. Её статус не является подтверждением банка.'}</p><div class="timeline"><div class="done">Вариант выбран</div><div class="done">Условия согласованы</div><div class="${current ? 'current' : ''}">Подтверждение банка</div></div>${reviewData(item)}${current ? `<p class="field-hint">Согласовано ${new Date(item.agreedAt).toLocaleString('ru-RU')}.</p><div class="info-banner"><p>Отправка в банк пока моделируется. Реальный банк не подключён, автоматического одобрения нет.</p></div>` : ''}`;
+  const descriptions = {bank_review: 'Заявка ожидает рассмотрения сотрудником банка.', in_review: 'Сотрудник изучает заявку и документы.',
+    needs_info: 'Сотрудник запросил дополнительную информацию. Ответьте ниже, чтобы продолжить.', approved: 'Сотрудник одобрил заявку. Денежные операции в прототипе не выполняются.', rejected: 'Сотрудник принял отрицательное решение. Причина указана ниже.'};
+  const events = item.events || [];
+  $('detail-content').innerHTML = `<span class="status ${item.status}">${statusNames[item.status] || item.status}</span><p class="detail-intro">${descriptions[item.status] || 'Сохранённая заявка.'}</p>${reviewData(item)}<div class="section"><h3>История заявки</h3>${events.map(event => `<div class="client-event"><strong>${escapeHTML(eventLabels[event.action] || event.action)}</strong><p>${escapeHTML(event.comment)}</p><small>${new Date(event.createdAt).toLocaleString('ru-RU')}</small></div>`).join('') || '<p class="muted">Заявка отправлена.</p>'}</div><div class="document-links">${(item.documents || []).map(document => `<a href="/credit/documents/${encodeURIComponent(document.id)}">↓ ${escapeHTML(document.filename)}</a>`).join('')}</div>${item.status === 'needs_info' ? '<form id="customer-clarification"><div class="field"><label for="customer-comment">Ответ сотруднику</label><textarea id="customer-comment" name="comment" required minlength="10" maxlength="2000"></textarea></div><div class="field"><label for="clarification-file">Дополнительный документ</label><input id="clarification-file" type="file" accept=".pdf,.docx,.xlsx,.csv,.txt,.json"></div><p id="clarification-documents" class="muted"></p><button class="button primary" type="submit">Отправить уточнение →</button></form>' : ''}`;
 }
+const eventLabels = {submit: 'Заявка отправлена', claim: 'Заявка взята в работу', approve: 'Одобрено сотрудником', reject: 'Отказ', request_info: 'Запрошено уточнение', clarification: 'Ответ клиента', recheck: 'Проверки обновлены'};
 function renderProfile() {
   const account = !user ? '<div class="card profile-card"><h2>Рады знакомству</h2><p class="muted">Войдите или создайте аккаунт для работы с профилем. Регистрация обязательна для составления заявки.</p><button class="button primary" data-action="login">Войти</button><button class="button secondary" data-action="register">Создать аккаунт</button></div>' : `<div class="card profile-card"><h2>${escapeHTML(user.username)}</h2><div class="profile-data"><span>Электронная почта</span><strong>${escapeHTML(user.email)}</strong></div><button class="button secondary" data-action="edit-profile">Изменить имя</button><button class="text-button" data-action="logout">Выйти из кабинета</button></div>`;
-  $('profile-content').innerHTML = `${account}<section class="section"><div class="section-heading"><h2>Заявки на подтверждении <span class="inline-count">${applications.filter(item => item.status === 'bank_review').length}</span></h2></div><div id="profile-applications">${applications.map(applicationCard).join('') || emptyApplications()}</div></section><div class="info-banner"><p>Демонстрационные заявки сохраняются на этом устройстве в вашем аккаунте.</p></div>`;
+  $('profile-content').innerHTML = `${account}<section class="section"><div class="section-heading"><h2>Заявки на подтверждении <span class="inline-count">${applications.filter(item => item.status === 'bank_review').length}</span></h2></div><div id="profile-applications">${applications.map(applicationCard).join('') || emptyApplications()}</div></section><div class="info-banner"><p>Заявки и решения сотрудников хранятся на сервере и доступны после входа с любого устройства.</p></div>`;
 }
 const accountFields = {
   email: {label: 'Электронная почта', type: 'email', autocomplete: 'email'},
@@ -561,6 +596,7 @@ document.addEventListener('click', event => {
     renderWizard();
   }
   if (button.dataset.detail) openDetail(button.dataset.detail);
+  if (button.dataset.removeDocument && draft) {draft.document_ids = (draft.document_ids || []).filter(id => id !== button.dataset.removeDocument); draft.documents = (draft.documents || []).filter(item => item.id !== button.dataset.removeDocument); draft.assessment = null; persist(); renderWizard();}
   if (button.dataset.filter) {
     filter = button.dataset.filter;
     for (const tab of document.querySelectorAll('[data-filter]')) {tab.classList.toggle('active', tab.dataset.filter === filter); tab.setAttribute('aria-pressed', String(tab.dataset.filter === filter));}
@@ -646,3 +682,73 @@ document.addEventListener('click', event => {
   updateAmountPreview();
   showDialog('amount-dialog');
 });
+
+function documentUploadSection() {
+  return `<div class="document-upload"><label for="company-document">Заполнить данные из документа</label><p>PDF с текстовым слоем, DOCX, XLSX, CSV, TXT или JSON · до 5 МБ</p><input id="company-document" type="file" accept=".pdf,.docx,.xlsx,.csv,.txt,.json"><div class="attached-documents">${(draft.documents || []).map(item => `<div><span>${escapeHTML(item.filename)}</span><button type="button" class="text-button" data-remove-document="${escapeHTML(item.id)}">Убрать</button></div>`).join('')}</div></div>`;
+}
+const documentFieldNames = {company: 'Компания', inn: 'ИНН', revenue: 'Выручка в месяц', expenses: 'Расходы в месяц', debt: 'Платежи по кредитам', age: 'Возраст бизнеса, мес.'};
+let extractedDocument = null;
+async function uploadFile(file) {
+  if (!file || file.size > 5 * 1024 * 1024) throw new Error('Размер документа должен быть не больше 5 МБ.');
+  const form = new FormData(); form.append('file', file);
+  const response = await fetch('/credit/documents', {method: 'POST', body: form, credentials: 'same-origin'});
+  const result = await response.json();
+  if (!response.ok) throw new Error(({DOCUMENT_SIZE_LIMIT: 'Размер документа должен быть не больше 5 МБ.', DOCUMENT_FORMAT_UNSUPPORTED: 'Этот формат не поддерживается.', DOCUMENT_TEXT_NOT_RECOGNIZED: 'Не удалось распознать поля. Используйте документ с подписями полей; сканы без текстового слоя не поддерживаются.'})[result.detail] || 'Не удалось загрузить документ.');
+  return result;
+}
+document.addEventListener('change', async event => {
+  if (event.target.id !== 'company-document' && event.target.id !== 'clarification-file') return;
+  if (!user || !event.target.files[0]) return;
+  const field = event.target;
+  field.disabled = true;
+  try {
+    if (field.id === 'company-document') {
+      if (!draft || (draft.document_ids || []).length >= 5) throw new Error('К заявке можно прикрепить до 5 документов.');
+      captureDraft();
+      const snapshot = draft;
+      const document = await uploadFile(field.files[0]);
+      if (draft !== snapshot) return;
+      draft.document_ids = [...(draft.document_ids || []), document.id];
+      draft.documents = [...(draft.documents || []), {id: document.id, filename: document.filename}];
+      draft.assessment = null;
+      extractedDocument = document;
+      persist(); renderWizard();
+      $('document-preview-name').textContent = document.filename;
+      $('document-preview-fields').innerHTML = Object.entries(document.fields).map(([key, value]) => `<label class="extracted-field"><input name="${key}" type="checkbox" ${draft[key] === '' || draft[key] === undefined ? 'checked' : ''}><span><strong>${documentFieldNames[key]}</strong><small>${escapeHTML(draft[key] || 'Пока не заполнено')} → ${escapeHTML(value)}</small></span></label>`).join('');
+      $('document-warnings').textContent = document.warnings.join(' · ');
+      showDialog('document-preview-dialog');
+    } else {
+      if (clarificationDocuments.length >= 5) throw new Error('Можно добавить до 5 документов.');
+      const id = detailId;
+      const document = await uploadFile(field.files[0]);
+      if (id !== detailId) return;
+      clarificationDocuments.push(document);
+      $('clarification-documents').textContent = clarificationDocuments.map(item => item.filename).join(', ');
+    }
+  } catch (error) { notify(error.message || 'Не удалось загрузить документ.'); }
+  finally {field.disabled = false; field.value = '';}
+});
+$('document-apply-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!draft || !extractedDocument || !user) return;
+  for (const [key] of new FormData(event.target)) if (Object.hasOwn(documentFieldNames, key)) draft[key] = extractedDocument.fields[key];
+  persist(); renderWizard(); closeDialog('document-preview-dialog');
+  notify('Выбранные данные перенесены. Проверьте их перед отправкой.');
+});
+document.addEventListener('submit', async event => {
+  if (event.target.id !== 'customer-clarification') return;
+  event.preventDefault();
+  const item = applications.find(item => item.id === detailId);
+  const comment = new FormData(event.target).get('comment').trim();
+  if (!item || comment.length < 10) return;
+  const button = event.target.querySelector('button[type="submit"]'); button.disabled = true;
+  try {
+    const result = await api('/credit/applications/' + encodeURIComponent(item.id) + '/clarification', 'POST', {version: item.version, comment, document_ids: clarificationDocuments.map(item => item.id)});
+    if (!result.ok) throw new Error('Не удалось отправить ответ. Обновите заявку и попробуйте ещё раз.');
+    applications[applications.findIndex(row => row.id === item.id)] = result.data;
+    clarificationDocuments = []; renderDetail(); renderApplications(); persist();
+    notify('Уточнение отправлено сотруднику.');
+  } catch (error) {notify(error.message);}
+  finally {button.disabled = false;}
+});
+window.Cabinet = {api, money, escapeHTML, notify, getUser: () => user};
