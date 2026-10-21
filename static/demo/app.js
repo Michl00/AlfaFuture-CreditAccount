@@ -1,6 +1,6 @@
 'use strict';
 
-const {products, payment, validate, validateRequest, advisor} = window.CreditFlow;
+const {products, payment, validate, validateRequest, advisor, goalSuggestions, approvalEstimate} = window.CreditFlow;
 const $ = id => document.getElementById(id);
 const money = amount => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(amount) + ' ₽';
 const moneyFields = new Set(['requestedAmount', 'amount', 'revenue', 'expenses', 'debt']);
@@ -41,6 +41,8 @@ let toastTimer;
 let saveTimer;
 let storageAvailable = true;
 let resolvingSession = true;
+let pendingApplication = null;
+let applicationSubmitting = false;
 
 function notify(message) {
   $('toast').textContent = message;
@@ -52,6 +54,7 @@ function showDialog(id) { if (!$(id).open) $(id).showModal(); }
 function closeDialog(id) { $(id).close(); }
 function storageKey() { return `credit-cabinet-v1:${user ? user.id : 'guest'}`; }
 function persist() {
+  if (!user) return;
   try {
     localStorage.setItem(storageKey(), JSON.stringify({draft, applications}));
     storageAvailable = true;
@@ -67,10 +70,13 @@ function loadWorkspace() {
   assessmentBusy = false;
   draft = null;
   applications = [];
+  if (!user) {renderAll(); return;}
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey()) || '{}');
     if (saved.draft && typeof saved.draft === 'object' && products.some(p => p.id === saved.draft.product)) {
       draft = {...emptyDraft(), ...saved.draft};
+      const oldGoal = products.find(product => product.id === draft.goal);
+      if (oldGoal) draft.goal = oldGoal.name;
       draft.requestedAmount = saved.draft.requestedAmount ?? saved.draft.amount ?? 1500000;
       draft.requestedMonths = saved.draft.requestedMonths ?? saved.draft.months ?? 24;
       draft.stage = Number.isInteger(draft.stage) && draft.stage >= 0 && draft.stage <= 3 ? draft.stage : 0;
@@ -82,10 +88,12 @@ function loadWorkspace() {
   renderAll();
 }
 function emptyDraft() {
-  return {goal: 'working', requestedAmount: 1500000, requestedMonths: 24, selectedOffer: null, stage: 0, product: 'working', amount: 1500000, months: 24, company: '', inn: '', revenue: '', expenses: '', debt: 0, age: '', clarification: ''};
+  return {goal: '', requestedAmount: 1500000, requestedMonths: 24, selectedOffer: null, stage: 0, product: 'working', amount: 1500000, months: 24, company: '', inn: '', revenue: '', expenses: '', debt: 0, age: '', clarification: ''};
 }
 function navigate(page) {
   currentPage = page;
+  document.body.classList.toggle('home-view', page === 'home');
+  if ($('menu-dialog').open) closeDialog('menu-dialog');
   for (const section of document.querySelectorAll('.page')) section.hidden = section.id !== `${page}-page`;
   for (const button of document.querySelectorAll('.nav-item')) {
     button.classList.toggle('active', button.dataset.page === page);
@@ -98,7 +106,6 @@ function navigate(page) {
 }
 function renderProducts() {
   const html = products.map(product => `<article class="card product-card"><div class="product-top"><span>${product.tag}</span><span class="product-icon" aria-hidden="true">${product.icon}</span></div><h3>${product.name}</h3><p>${product.description}</p><div class="product-facts"><div><strong>до ${product.max / 1000000} млн ₽</strong><span>сумма кредита</span></div><div><strong>${String(product.rate).replace('.', ',')}%</strong><span>пример ставки</span></div></div><button class="button secondary full" data-product="${product.id}">Выбрать <span>→</span></button></article>`).join('');
-  $('home-products').innerHTML = html;
   $('all-products').innerHTML = html;
 }
 function updateCalculator(source) {
@@ -120,10 +127,8 @@ function applicationCard(item) {
 function renderApplications() {
   const total = applications.length + (draft ? 1 : 0);
   $('application-count').textContent = total;
-  $('home-application-count').textContent = total;
   let draftHTML = '';
   if (draft) draftHTML = `<article class="card application-card"><div class="application-main"><span class="application-reference">ВЫ МОЖЕТЕ ПРОДОЛЖИТЬ</span><h3>Незавершённая заявка</h3><p>Черновик доступен на этом устройстве</p></div><span class="status">Черновик</span><button class="button secondary" data-action="apply">Продолжить <span>→</span></button><button class="text-button" data-action="delete-draft">Удалить черновик</button></article>`;
-  $('home-applications').innerHTML = draftHTML + applications.slice(0, 2).map(applicationCard).join('') || emptyApplications();
   const visible = applications.filter(item => filter === 'all' || (filter === 'completed' ? finished.includes(item.status) : !finished.includes(item.status)));
   const content = (filter !== 'completed' ? draftHTML : '') + visible.map(applicationCard).join('');
   $('applications-list').innerHTML = content || (filter === 'all' ? emptyApplications() : '<div class="empty-card"><div><h3>Таких заявок пока нет</h3><p>Выберите другой фильтр или создайте новую заявку.</p></div></div>');
@@ -137,6 +142,7 @@ function renderAll() {
 }
 function beginApplication(productId, fromCalculator = false) {
   if (resolvingSession) { notify('Подождите, проверяем вход в кабинет.'); return; }
+  if (!user) {pendingApplication = {productId, fromCalculator}; showRegistrationStep(); return;}
   if (!draft) draft = emptyDraft();
   if (productId || fromCalculator) {
     clearTimeout(assessmentTimer);
@@ -145,9 +151,8 @@ function beginApplication(productId, fromCalculator = false) {
     draft.selectedOffer = null;
     draft.assessment = null;
   }
-  if (productId) draft.goal = productId;
+  if (productId) draft.goal = products.find(product => product.id === productId).name;
   if (fromCalculator) {
-    draft.goal = Number($('calc-term').value) > 36 ? 'equipment' : 'working';
     draft.requestedAmount = Number(ungroup($('calc-amount').value));
     draft.requestedMonths = Number($('calc-term').value);
   }
@@ -166,7 +171,7 @@ function field(name, label, options = {}) {
 function reviewData(item, amount = Number(item.amount)) {
   const product = products.find(p => p.id === item.product);
   const rate = Number(item.rate ?? product.rate);
-  return `<div class="review-data"><div><span>Цель финансирования</span><strong>${product.short}</strong></div><div><span>Компания</span><strong>${escapeHTML(item.company)}</strong></div><div><span>Сумма</span><strong>${money(amount)}</strong></div><div><span>Срок</span><strong>${item.months} мес.</strong></div><div><span>Предварительная ставка</span><strong>${String(rate).replace('.', ',')}% годовых</strong></div><div><span>Ежемесячный платёж</span><strong>${money(payment(amount, Number(item.months), rate))}</strong></div></div>`;
+  return `<div class="review-data"><div><span>Цель финансирования</span><strong>${escapeHTML(item.goal || product.short)}</strong></div><div><span>Компания</span><strong>${escapeHTML(item.company)}</strong></div><div><span>Сумма</span><strong>${money(amount)}</strong></div><div><span>Срок</span><strong>${item.months} мес.</strong></div><div><span>Предварительная ставка</span><strong>${String(rate).replace('.', ',')}% годовых</strong></div><div><span>Ежемесячный платёж</span><strong>${money(payment(amount, Number(item.months), rate))}</strong></div></div>`;
 }
 function comparison(assessment) {
   const product = products.find(p => p.id === draft.product);
@@ -182,19 +187,21 @@ function offerCards() {
   }).join('');
 }
 function renderWizard() {
+  if (!user) {showRegistrationStep(); return;}
+  $('wizard-next').hidden = false;
   $('application-error').hidden = true;
-  $('wizard-progress').innerHTML = ['1. Ваши планы', '2. Варианты', '3. О компании', '4. Согласование'].map((label, index) => `<span class="${index <= wizardStep ? 'active' : ''}" ${index === wizardStep ? 'aria-current="step"' : ''}>${label}</span>`).join('');
+  $('wizard-progress').innerHTML = ['1. Аккаунт ✓', '2. Ваши планы', '3. Варианты', '4. О компании', '5. Согласование'].map((label, index) => `<span class="${index <= wizardStep + 1 ? 'active' : ''}" ${index === wizardStep + 1 ? 'aria-current="step"' : ''}>${label}</span>`).join('');
   $('wizard-back').hidden = wizardStep === 0;
   $('wizard-back').disabled = assessmentBusy;
   $('wizard-next').disabled = assessmentBusy;
   $('wizard-next').innerHTML = wizardStep === 0 ? 'Подобрать варианты <span>→</span>' : wizardStep === 2 ? 'Оценить условия <span>→</span>' : wizardStep === 3 ? 'Согласовать и отправить в банк <span>→</span>' : 'Продолжить <span>→</span>';
   if (wizardStep === 0) {
-    $('wizard-fields').innerHTML = `<div class="field"><label for="app-goal">Для чего нужны деньги?</label><select id="app-goal" name="goal">${products.map(p => `<option value="${p.id}" ${p.id === draft.goal ? 'selected' : ''}>${p.name}</option>`).join('')}</select></div><div class="form-grid">${field('requestedAmount', 'Сколько нужно, ₽', {min: 100000, max: 10000000})}${field('requestedMonths', 'На какой срок, месяцев', {type: 'number', min: 6, max: 60, step: 1})}</div><p class="muted">Сначала подберём варианты под ваши планы. Сведения о компании понадобятся после выбора.</p>`;
+    $('wizard-fields').innerHTML = `<div class="field"><label for="app-goal">Для чего нужны деньги?</label><input id="app-goal" name="goal" value="${escapeHTML(draft.goal)}" list="goal-options" minlength="3" maxlength="500" placeholder="Например, открыть кофейню и купить оборудование" required><datalist id="goal-options">${goalSuggestions.map(goal => `<option value="${escapeHTML(goal)}"></option>`).join('')}</datalist><p class="field-hint">Опишите цель своими словами или выберите подсказку.</p></div><div class="goal-suggestions" aria-label="Примеры целей кредита">${goalSuggestions.map(goal => `<button type="button" data-goal="${escapeHTML(goal)}">${escapeHTML(goal)}</button>`).join('')}</div><div class="form-grid">${field('requestedAmount', 'Сколько нужно, ₽', {min: 100000, max: 10000000})}${field('requestedMonths', 'На какой срок, месяцев', {type: 'number', min: 6, max: 60, step: 1})}</div><p class="muted">Сначала подберём варианты под ваши планы. Сведения о компании понадобятся после выбора.</p>`;
   } else if (wizardStep === 1) {
     $('wizard-fields').innerHTML = `<p class="muted">Варианты под запрос ${money(Number(draft.requestedAmount))} на ${draft.requestedMonths} мес. Выберите один, чтобы продолжить.</p><div class="offers-list">${offerCards()}</div><p class="small-note">Предварительные условия. После оценки бизнеса они могут измениться.</p>`;
   } else if (wizardStep === 2) {
     const product = products.find(p => p.id === draft.product);
-    $('wizard-fields').innerHTML = `<div class="info-banner"><p>Выбрано: <strong>${product.name}</strong> · ${money(Number(draft.amount))} на ${draft.months} мес.</p></div><div class="section-heading"><p class="muted">Расскажите о компании, чтобы оценить условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div><div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {min: 0, max: 1000000000})}${field('debt', 'Платежи по кредитам, ₽/мес.', {min: 0, max: 1000000000})}${field('age', 'Возраст бизнеса, месяцев', {type: 'number', min: 0, max: 1200, step: 1})}</div><p class="field-hint">Используйте вымышленные данные. Оценка пока демонстрационная.</p>`;
+    $('wizard-fields').innerHTML = `<div class="info-banner"><p>Выбрано: <strong>${product.name}</strong> · ${money(Number(draft.amount))} на ${draft.months} мес.</p></div><div class="section-heading"><p class="muted">Расскажите о компании, чтобы оценить условия.</p><button type="button" class="text-button" data-action="sample">Заполнить примером →</button></div><div class="form-grid">${field('company', 'Название компании или ИП', {maxLength: 120})}${field('inn', 'ИНН', {maxLength: 12, hint: '10 или 12 цифр'})}${field('revenue', 'Среднемесячная выручка, ₽', {min: 1, max: 1000000000})}${field('expenses', 'Среднемесячные расходы, ₽', {min: 0, max: 1000000000})}${field('debt', 'Платежи по кредитам, ₽/мес.', {min: 0, max: 1000000000})}${field('age', 'Возраст бизнеса, месяцев', {type: 'number', min: 0, max: 1200, step: 1})}</div><div id="approval-indicator" class="approval-indicator" aria-live="polite"></div><p class="field-hint">Используйте вымышленные данные. Оценка пока демонстрационная.</p>`;
   } else if (assessmentBusy) {
     $('wizard-fields').innerHTML = '<div class="assessment-loading" role="status"><span class="loading-ring"></span><h3>Подбираем посильные условия</h3><p>Учитываем доходы, расходы и действующие обязательства компании.</p></div>';
   } else {
@@ -211,10 +218,11 @@ function renderWizard() {
       $('wizard-fields').innerHTML = `<div class="section-heading"><h3>Ваши условия к согласованию</h3><span class="offer-tag">Предварительная оценка</span></div>${comparison(assessment)}${reasons}<div class="info-banner"><p>Банк ещё не получил заявку и не принимал решение. Проверьте изменения и подтвердите согласие на отправку.</p></div><label class="checkbox-label"><input name="consent" type="checkbox" required><span>Согласен с указанными выше суммой, сроком, ставкой и платежом и хочу отправить заявку на подтверждение в банк.</span></label>`;
     }
   }
+  if (wizardStep === 2) updateApprovalIndicator();
   $('draft-status').textContent = storageAvailable ? 'Черновик сохранён на этом устройстве' : 'Изменения доступны до закрытия вкладки';
 }
 function captureDraft() {
-  if (!draft) return;
+  if (!user || !draft) return;
   for (const [key, value] of new FormData($('application-form'))) if (key !== 'consent') draft[key] = moneyFields.has(key) ? ungroup(value) : value;
 }
 function wizardError(message) {
@@ -228,6 +236,7 @@ function moveToStep(step) {
   renderWizard();
 }
 function runAssessment() {
+  if (!user || !draft) {showRegistrationStep(); return;}
   clearTimeout(saveTimer);
   assessmentBusy = true;
   draft.stage = 3;
@@ -244,15 +253,18 @@ function runAssessment() {
   }, 800);
 }
 $('application-form').addEventListener('input', event => {
+  if (!user || !draft) return;
   if (event.target.hasAttribute('data-money')) formatMoneyInput(event.target);
   captureDraft();
+  if (wizardStep === 2) updateApprovalIndicator();
   if (wizardStep < 3) draft.assessment = null;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(persist, 250);
 });
-$('application-form').addEventListener('submit', event => {
+$('application-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (assessmentBusy || !draft) return;
+  if (!user) {pendingApplication = pendingApplication || {}; showRegistrationStep(); return;}
+  if (assessmentBusy || applicationSubmitting || !draft) return;
   captureDraft();
   if (wizardStep === 0) {
     const error = validateRequest(draft);
@@ -278,6 +290,25 @@ $('application-form').addEventListener('submit', event => {
     // Clarifications need a fresh assessment and a separate consent, never implicit submission.
     if (!$('application-form').querySelector('[name="consent"]')) {runAssessment(); return;}
     if (!new FormData($('application-form')).get('consent')) return;
+    applicationSubmitting = true;
+    $('wizard-next').disabled = true;
+    const snapshot = draft;
+    const previousUserId = user.id;
+    let session;
+    try { session = await syncUser(); }
+    catch { applicationSubmitting = false; $('wizard-next').disabled = false; return wizardError('Не удалось проверить вход. Попробуйте ещё раз.'); }
+    applicationSubmitting = false;
+    $('wizard-next').disabled = false;
+    if (!session || session.id !== previousUserId) {
+      persist();
+      user = session;
+      loadWorkspace();
+      pendingApplication = {};
+      if (!user) showRegistrationStep();
+      else {closeDialog('application-dialog'); beginApplication(); notify('Аккаунт изменился. Проверьте заявку в своём профиле.');}
+      return;
+    }
+    if (draft !== snapshot) return;
     clearTimeout(saveTimer);
     const createdAt = Date.now();
     const item = {...draft, ...assessment.terms, assessment, selectedTerms: {amount: Number(draft.amount), months: Number(draft.months), rate: products.find(p => p.id === draft.product).rate}, flowVersion: 2, id: `${createdAt.toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`, status: 'bank_review', createdAt, agreedAt: createdAt};
@@ -292,12 +323,13 @@ $('application-form').addEventListener('submit', event => {
   }
 });
 $('wizard-back').addEventListener('click', () => {
+  if (!user || !draft) {showRegistrationStep(); return;}
   if (assessmentBusy) return;
   captureDraft();
   draft.assessment = null;
   moveToStep(Math.max(0, wizardStep - 1));
 });
-function openDetail(id) { detailId = id; renderDetail(); showDialog('detail-dialog'); }
+function openDetail(id) { if (!user) {pendingApplication = {}; showRegistrationStep(); return;} detailId = id; renderDetail(); showDialog('detail-dialog'); }
 function renderDetail() {
   const item = applications.find(a => a.id === detailId);
   if (!item) return;
@@ -306,8 +338,8 @@ function renderDetail() {
   $('detail-content').innerHTML = `<span class="status ${item.status}">${statusNames[item.status]}</span><p class="detail-intro">${current ? 'Вы согласовали условия. Заявка направлена на подтверждение банка. До его решения условия остаются предварительными.' : 'Эта заявка сохранена в предыдущем демонстрационном сценарии. Её статус не является подтверждением банка.'}</p><div class="timeline"><div class="done">Вариант выбран</div><div class="done">Условия согласованы</div><div class="${current ? 'current' : ''}">Подтверждение банка</div></div>${reviewData(item)}${current ? `<p class="field-hint">Согласовано ${new Date(item.agreedAt).toLocaleString('ru-RU')}.</p><div class="info-banner"><p>Отправка в банк пока моделируется. Реальный банк не подключён, автоматического одобрения нет.</p></div>` : ''}`;
 }
 function renderProfile() {
-  const account = !user ? '<div class="card profile-card"><h2>Рады знакомству</h2><p class="muted">Войдите или создайте аккаунт для работы с профилем. Демо-заявки гостя сохраняются отдельно на этом устройстве.</p><button class="button primary" data-action="login">Войти</button><button class="button secondary" data-action="register">Создать аккаунт</button></div>' : `<div class="card profile-card"><h2>${escapeHTML(user.username)}</h2><div class="profile-data"><span>Электронная почта</span><strong>${escapeHTML(user.email)}</strong></div><div class="profile-data"><span>Почта подтверждена</span><strong>${user.is_verified ? 'Да' : 'Пока нет'}</strong></div><button class="button secondary" data-action="edit-profile">Изменить имя</button>${!user.is_verified ? '<button class="button secondary" data-action="request-verify">Подтвердить почту</button>' : ''}<button class="text-button" data-action="logout">Выйти из кабинета</button></div>`;
-  $('profile-content').innerHTML = `${account}<section class="section"><div class="section-heading"><h2>Заявки на подтверждении <span class="inline-count">${applications.filter(item => item.status === 'bank_review').length}</span></h2></div><div id="profile-applications">${applications.map(applicationCard).join('') || emptyApplications()}</div></section><div class="info-banner"><p>Демонстрационные заявки сохраняются на этом устройстве отдельно для каждого аккаунта и гостя.</p></div>`;
+  const account = !user ? '<div class="card profile-card"><h2>Рады знакомству</h2><p class="muted">Войдите или создайте аккаунт для работы с профилем. Регистрация обязательна для составления заявки.</p><button class="button primary" data-action="login">Войти</button><button class="button secondary" data-action="register">Создать аккаунт</button></div>' : `<div class="card profile-card"><h2>${escapeHTML(user.username)}</h2><div class="profile-data"><span>Электронная почта</span><strong>${escapeHTML(user.email)}</strong></div><div class="profile-data"><span>Почта подтверждена</span><strong>${user.is_verified ? 'Да' : 'Пока нет'}</strong></div><button class="button secondary" data-action="edit-profile">Изменить имя</button>${!user.is_verified ? '<button class="button secondary" data-action="request-verify">Подтвердить почту</button>' : ''}<button class="text-button" data-action="logout">Выйти из кабинета</button></div>`;
+  $('profile-content').innerHTML = `${account}<section class="section"><div class="section-heading"><h2>Заявки на подтверждении <span class="inline-count">${applications.filter(item => item.status === 'bank_review').length}</span></h2></div><div id="profile-applications">${applications.map(applicationCard).join('') || emptyApplications()}</div></section><div class="info-banner"><p>Демонстрационные заявки сохраняются на этом устройстве в вашем аккаунте.</p></div>`;
 }
 const accountFields = {
   email: {label: 'Электронная почта', type: 'email', autocomplete: 'email'},
@@ -368,6 +400,29 @@ async function syncUser() {
   if (result.status === 401 || result.status === 403) return null;
   throw new Error('Profile unavailable');
 }
+async function completeLogin() {
+  const session = await syncUser();
+  if (!session) throw new Error('Session unavailable');
+  user = session;
+  loadWorkspace();
+  $('account-fields').replaceChildren();
+  closeDialog('account-dialog');
+  const intent = pendingApplication;
+  pendingApplication = null;
+  if (intent) beginApplication(intent.productId, intent.fromCalculator);
+  else notify('Вы вошли в кабинет.');
+}
+function showRegistrationStep() {
+  clearTimeout(assessmentTimer);
+  assessmentBusy = false;
+  $('wizard-progress').innerHTML = ['1. Регистрация', '2. Ваши планы', '3. Варианты', '4. О компании', '5. Согласование'].map((label, index) => `<span class="${index === 0 ? 'active' : ''}" ${index === 0 ? 'aria-current="step"' : ''}>${label}</span>`).join('');
+  $('wizard-fields').innerHTML = '<div class="registration-step"><h3>Сначала создайте аккаунт</h3><p>Регистрация обязательна для составления заявки. После неё вы сможете указать цель и сохранить заявку в своём профиле.</p><button type="button" class="button primary" data-action="register">Создать аккаунт <span>→</span></button><button type="button" class="button secondary" data-action="login">Уже есть аккаунт? Войти</button></div>';
+  $('application-error').hidden = true;
+  $('wizard-back').hidden = true;
+  $('wizard-next').hidden = true;
+  $('draft-status').textContent = '';
+  showDialog('application-dialog');
+}
 $('account-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (accountBusy) return;
@@ -386,23 +441,24 @@ $('account-form').addEventListener('submit', async event => {
       return;
     }
     if (mode === 'login') {
-      user = await syncUser();
-      if (!user) throw new Error('Session unavailable');
-      loadWorkspace();
-      closeDialog('account-dialog');
-      notify('Вы вошли в кабинет.');
+      await completeLogin();
     } else if (mode === 'edit') {
       user = result.data;
       renderAll();
       closeDialog('account-dialog');
       notify('Имя в профиле обновлено.');
     } else if (mode === 'register') {
-      accountBusy = false;
-      openAccount('login');
-      $('account-email').value = fields.email;
-      $('account-message').textContent = 'Аккаунт создан. Войдите с вашим паролем.';
-      $('account-message').className = 'form-message';
-      $('account-message').hidden = false;
+      // Registration creates an account; a successful cookie login opens the next step.
+      const login = await api('/auth/login', 'POST', {username: fields.email, password: fields.password}, true);
+      if (login.ok) await completeLogin();
+      else {
+        accountBusy = false;
+        openAccount('login');
+        $('account-email').value = fields.email;
+        $('account-message').textContent = 'Аккаунт создан. Войдите с вашим паролем, чтобы продолжить.';
+        $('account-message').className = 'form-message';
+        $('account-message').hidden = false;
+      }
     } else {
       $('account-message').textContent = mode === 'forgot' ? 'Если аккаунт с такой почтой существует, мы отправим ссылку для восстановления.' : mode === 'reset' ? 'Пароль изменён. Теперь можно войти с новым паролем.' : 'Почта подтверждена. Можно вернуться в кабинет.';
       $('account-message').className = 'form-message';
@@ -423,6 +479,9 @@ async function logout() {
     const result = await api('/auth/logout', 'POST');
     if (!result.ok && result.status !== 401) throw new Error('Logout failed');
     user = null;
+    pendingApplication = null;
+    closeDialog('application-dialog');
+    closeDialog('detail-dialog');
     loadWorkspace();
     navigate('home');
     notify('Вы вышли из аккаунта.');
@@ -433,12 +492,16 @@ document.addEventListener('click', event => {
   const button = event.target.closest('button');
   if (!button) return;
   if (button.dataset.close) {
-    if (button.dataset.close === 'application-dialog') {captureDraft(); clearTimeout(saveTimer); persist(); renderApplications();}
+    if (button.dataset.close === 'application-dialog') {if (!user) pendingApplication = null; captureDraft(); clearTimeout(saveTimer); persist(); renderApplications();}
     closeDialog(button.dataset.close);
   }
   if (button.dataset.page) navigate(button.dataset.page);
+  if (button.dataset.goal && user && draft && wizardStep === 0) {
+    $('app-goal').value = button.dataset.goal;
+    captureDraft(); persist();
+  }
   if (button.dataset.product) beginApplication(button.dataset.product);
-  if (button.dataset.offer && draft && wizardStep === 1) {
+  if (button.dataset.offer && user && draft && wizardStep === 1) {
     draft.selectedOffer = button.dataset.offer;
     persist();
     renderWizard();
@@ -451,10 +514,10 @@ document.addEventListener('click', event => {
   }
   const action = button.dataset.action;
   if (action === 'apply') beginApplication();
-  if (action === 'help') showDialog('help-dialog');
+  if (action === 'help') {closeDialog('menu-dialog'); showDialog('help-dialog');}
   if (action === 'delete-draft') {clearTimeout(saveTimer); draft = null; persist(); renderApplications(); notify('Черновик удалён.');}
-  if (action === 'account') user ? navigate('profile') : openAccount('login');
-  if (['login', 'register', 'forgot'].includes(action)) { $('account-submit').hidden = false; openAccount(action); }
+  if (action === 'account') {closeDialog('menu-dialog'); user ? navigate('profile') : openAccount('login');}
+  if (['login', 'register', 'forgot'].includes(action)) { if ($('application-dialog').open) closeDialog('application-dialog'); $('account-submit').hidden = false; openAccount(action); }
   if (action === 'edit-profile' && user) openAccount('edit');
   if (action === 'logout') logout();
   if (action === 'request-verify' && user) {
@@ -463,15 +526,15 @@ document.addEventListener('click', event => {
       notify(result.ok ? 'Если почта ожидает подтверждения, мы отправим письмо со ссылкой.' : 'Не удалось отправить письмо. Попробуйте позже.');
     }).catch(() => notify('Проверьте соединение и попробуйте ещё раз.')).finally(() => {button.disabled = false;});
   }
-  if (action === 'sample') {
+  if (action === 'sample' && user && draft) {
     Object.assign(draft, {company: 'ООО «Вектор»', inn: '7701234560', revenue: 1200000, expenses: 700000, debt: 20000, age: 24});
     persist(); renderWizard();
   }
 
 });
-$('application-dialog').addEventListener('cancel', () => {captureDraft(); clearTimeout(saveTimer); persist(); renderApplications();});
+$('application-dialog').addEventListener('cancel', () => {if (!user) pendingApplication = null; captureDraft(); clearTimeout(saveTimer); persist(); renderApplications();});
 $('account-dialog').addEventListener('close', () => {
-  if (!accountBusy) {$('account-fields').replaceChildren(); $('account-submit').hidden = false;}
+  if (!accountBusy) {pendingApplication = null; $('account-fields').replaceChildren(); $('account-submit').hidden = false;}
 });
 $('calc-range').addEventListener('input', () => updateCalculator('calc-range'));
 $('calc-amount').addEventListener('input', () => updateCalculator('calc-amount'));
@@ -491,6 +554,45 @@ if (flow === 'reset' || flow === 'verify') {
 }
 (async () => {
   try { user = await syncUser(); }
-  catch { notify('Сервис профиля временно недоступен. Демонстрационные заявки доступны без входа.'); }
+  catch { /* Keep the hero clean; account access will show errors when requested. */ }
   finally { resolvingSession = false; loadWorkspace(); }
 })();
+
+$('menu-toggle').addEventListener('click', () => {showDialog('menu-dialog'); $('menu-toggle').setAttribute('aria-expanded', 'true');});
+$('menu-dialog').addEventListener('close', () => {$('menu-toggle').setAttribute('aria-expanded', 'false');});
+
+function estimateMarkup(estimate) {
+  return `<div class="estimate-header"><span>Предварительная вероятность одобрения</span><strong class="estimate-label ${estimate.level}">${estimate.label}</strong></div><div class="estimate-track" role="img" aria-label="${estimate.label}"><span class="${estimate.level}" style="width:${estimate.score}%"></span></div>`;
+}
+function updateApprovalIndicator() {
+  if (!draft || !$('approval-indicator')) return;
+  const estimate = approvalEstimate(draft);
+  $('approval-indicator').innerHTML = `${estimateMarkup(estimate)}<div class="estimate-context"><span>При сумме ${money(Number(draft.amount))} на ${draft.months} мес.</span>${estimate.level === 'low' ? '<button type="button" class="button secondary" data-action="adjust-amount">Изменить</button>' : ''}</div><p class="field-hint">Демо-оценка по указанным данным. Итоговое решение принимает банк.</p>`;
+}
+function updateAmountPreview() {
+  const amount = Number($('adjust-amount').value);
+  $('adjust-value').textContent = money(amount);
+  const estimate = approvalEstimate({...draft, amount});
+  $('adjust-estimate').innerHTML = `${estimateMarkup(estimate)}<p class="muted">Примерный платёж: ${money(payment(amount, Number(draft.months), products.find(p => p.id === draft.product).rate))} в месяц</p>`;
+}
+$('adjust-amount').addEventListener('input', updateAmountPreview);
+$('amount-adjust-form').addEventListener('submit', event => {
+  event.preventDefault();
+  if (!user || !draft || wizardStep !== 2) return;
+  captureDraft();
+  draft.amount = Number($('adjust-amount').value);
+  draft.assessment = null;
+  persist();
+  closeDialog('amount-dialog');
+  renderWizard();
+});
+document.addEventListener('click', event => {
+  if (!event.target.closest('[data-action="adjust-amount"]') || !user || !draft) return;
+  captureDraft();
+  const product = products.find(p => p.id === draft.product);
+  $('adjust-amount').max = product.max;
+  $('adjust-amount').value = draft.amount;
+  $('adjust-max').textContent = money(product.max);
+  updateAmountPreview();
+  showDialog('amount-dialog');
+});

@@ -35,7 +35,7 @@ async function setup(t, options = {}) {
   if (options.storage) for (const [key, value] of Object.entries(options.storage)) window.localStorage.setItem(key, value);
   window.fetch = async (...args) => {
     calls.push(args);
-    return options.fetch ? options.fetch(...args) : new Response('{"detail":"Unauthorized"}', {status: 401});
+    return options.fetch ? options.fetch(...args) : options.guest ? new Response('{}', {status: 401}) : new Response(JSON.stringify({id: 1, username: 'Тест', email: 'test@example.com', is_verified: true}));
   };
   window.eval(domain);
   window.eval(script);
@@ -53,11 +53,12 @@ async function setup(t, options = {}) {
     for (const [id, callback] of [...pendingAssessments]) {pendingAssessments.delete(id); callback();}
     await tick();
   };
-  const state = key => JSON.parse(window.localStorage.getItem(key || 'credit-cabinet-v1:guest'));
+  const state = key => JSON.parse(window.localStorage.getItem(key || 'credit-cabinet-v1:1'));
   return {window, calls, clock, get, click, set, submit, advance, finishAssessment, state};
 }
 async function prepareTerms(ui, overrides = {}) {
   ui.click('[data-action="apply"]');
+  if (ui.get('app-goal')) ui.set('app-goal', 'Пополнение оборотных средств');
   for (const key of ['requestedAmount', 'requestedMonths']) if (overrides[key] !== undefined) ui.set(`app-${key}`, overrides[key]);
   await ui.submit('application-form');
   ui.click(`[data-offer="${overrides.product || 'working'}"]`);
@@ -113,12 +114,13 @@ test('dashboard hides developer internals and calculator opens the needs stage',
   ui.get('calculator-apply').click();
   assert.equal(ui.get('app-requestedAmount').value, '2 000 000');
   assert.equal(ui.get('app-requestedMonths').value, '60');
-  assert.equal(ui.get('app-goal').value, 'equipment');
+  assert.equal(ui.get('app-goal').value, '');
 });
 
 test('a user must explicitly select an offer before entering company details', async t => {
   const ui = await setup(t);
   ui.click('[data-action="apply"]');
+  if (ui.get('app-goal')) ui.set('app-goal', 'Пополнение оборотных средств');
   await ui.submit('application-form');
   assert.equal(ui.get('wizard-fields').querySelectorAll('[data-offer]').length, 3);
   assert.equal(ui.get('app-company'), null);
@@ -150,10 +152,10 @@ test('assessment and corrections precede consent and submission to the bank', as
   assert.match(ui.get('profile-applications').textContent, /Ожидает подтверждения банка/);
   ui.advance();
   assert.equal(ui.state().applications[0].status, 'bank_review');
-  const restored = await setup(t, {storage: {'credit-cabinet-v1:guest': JSON.stringify(ui.state())}});
+  const restored = await setup(t, {storage: {'credit-cabinet-v1:1': JSON.stringify(ui.state())}});
   restored.click('[data-page="profile"]');
   assert.match(restored.get('profile-applications').textContent, /Ожидает подтверждения банка/);
-  assert.equal(restored.calls.length, 1); // No CometAPI or real bank calls.
+  assert.equal(restored.calls.length, 1); // Only a session check, no CometAPI or bank calls.
 });
 
 test('clarification must be reassessed and separately consented before sending', async t => {
@@ -191,7 +193,7 @@ test('reopening a saved assessment never restores consent', async t => {
   await prepareTerms(ui);
   ui.window.document.querySelector('[name="consent"]').checked = true;
   ui.click('[data-close="application-dialog"]');
-  const restored = await setup(t, {storage: {'credit-cabinet-v1:guest': JSON.stringify(ui.state())}});
+  const restored = await setup(t, {storage: {'credit-cabinet-v1:1': JSON.stringify(ui.state())}});
   restored.click('[data-action="apply"]');
   assert.equal(restored.window.document.querySelector('[name="consent"]').checked, false);
   assert.equal(restored.state().applications.length, 0);
@@ -211,9 +213,10 @@ test('changing company data after assessment requires a fresh evaluation', async
 test('draft amount survives closing and reload and can be deleted', async t => {
   const ui = await setup(t);
   ui.click('[data-action="apply"]');
+  if (ui.get('app-goal')) ui.set('app-goal', 'Пополнение оборотных средств');
   ui.set('app-requestedAmount', 2100000);
   ui.click('[data-close="application-dialog"]');
-  const restored = await setup(t, {storage: {'credit-cabinet-v1:guest': JSON.stringify(ui.state())}});
+  const restored = await setup(t, {storage: {'credit-cabinet-v1:1': JSON.stringify(ui.state())}});
   restored.click('[data-action="apply"]');
   assert.equal(restored.get('app-requestedAmount').value, '2 100 000');
   restored.click('[data-close="application-dialog"]');
@@ -246,6 +249,7 @@ test('login uses form encoding, restores user workspace and never stores credent
   assert.equal(ui.get('account-name').textContent, 'Мария');
   assert.equal(ui.get('account-dialog').open, false);
   ui.click('[data-action="apply"]');
+  if (ui.get('app-goal')) ui.set('app-goal', 'Пополнение оборотных средств');
   assert.ok(ui.window.localStorage.getItem('credit-cabinet-v1:3'));
   assert.doesNotMatch(ui.window.localStorage.getItem('credit-cabinet-v1:3'), /secret-password|demo\+test/);
 });
@@ -274,6 +278,7 @@ test('unavailable storage leaves the working flow usable and warns the user', as
   const ui = await setup(t);
   ui.window.Storage.prototype.setItem = () => {throw new Error('Quota exceeded');};
   ui.click('[data-action="apply"]');
+  if (ui.get('app-goal')) ui.set('app-goal', 'Пополнение оборотных средств');
   assert.equal(ui.get('application-dialog').open, true);
   assert.match(ui.get('draft-status').textContent, /до закрытия вкладки/);
 });
@@ -285,6 +290,7 @@ test('monetary fields preserve grouping and numeric values across the new stages
   assert.equal(ui.get('calc-range').value, '10000000');
   ui.get('calculator-apply').click();
   assert.equal(ui.get('app-requestedAmount').value, '10 000 000');
+  ui.set('app-goal', 'Закупка товаров');
   await ui.submit('application-form');
   ui.click('[data-offer="working"]');
   await ui.submit('application-form');
@@ -293,4 +299,90 @@ test('monetary fields preserve grouping and numeric values across the new stages
   ui.set('app-revenue', '2 500 000');
   await ui.submit('application-form');
   assert.equal(ui.state().draft.revenue, '2500000');
+});
+
+
+test('registration is the first required step and guests cannot create drafts', async t => {
+  const ui = await setup(t, {guest: true});
+  ui.click('[data-action="apply"]');
+  assert.match(ui.get('wizard-fields').textContent, /Сначала создайте аккаунт/);
+  assert.equal(ui.get('app-goal'), null);
+  assert.equal(ui.get('wizard-next').hidden, true);
+  await ui.submit('application-form');
+  assert.equal(ui.window.localStorage.length, 0);
+  assert.equal(ui.get('app-requestedAmount'), null);
+});
+
+test('successful registration logs in and resumes the application with no guest workspace', async t => {
+  let loggedIn = false;
+  const ui = await setup(t, {fetch: async url => {
+    if (url === '/auth/register') return new Response('{}', {status: 201});
+    if (url === '/auth/login') {loggedIn = true; return new Response(null, {status: 204});}
+    return loggedIn ? new Response(JSON.stringify({id: 8, username: 'Новый', email: 'new@example.com', is_verified: false})) : new Response('{}', {status: 401});
+  }});
+  ui.click('[data-action="apply"]');
+  ui.click('#application-dialog [data-action="register"]');
+  for (const [name, value] of Object.entries({email: 'new@example.com', password: 'secret-password', username: 'Новый', inn: '7701234560'})) ui.set(`account-${name}`, value);
+  await ui.submit('account-form');
+  assert.equal(ui.get('account-dialog').open, false);
+  assert.equal(ui.get('application-dialog').open, true);
+  assert.ok(ui.get('app-goal'));
+  assert.equal(ui.window.localStorage.getItem('credit-cabinet-v1:guest'), null);
+  assert.ok(ui.window.localStorage.getItem('credit-cabinet-v1:8'));
+});
+
+test('expired server session prevents final submission and asks for an account', async t => {
+  let expired = false;
+  const ui = await setup(t, {fetch: async () => expired ? new Response('{}', {status: 401}) : new Response(JSON.stringify({id: 1, username: 'Тест', email: 'test@example.com'}))});
+  await prepareTerms(ui);
+  ui.window.document.querySelector('[name="consent"]').checked = true;
+  expired = true;
+  await ui.submit('application-form');
+  assert.equal(ui.state().applications.length, 0);
+  assert.equal(ui.window.localStorage.getItem('credit-cabinet-v1:guest'), null);
+  assert.match(ui.get('wizard-fields').textContent, /Сначала создайте аккаунт/);
+});
+
+test('free-form purposes and suggestions preserve arbitrary user wording', async t => {
+  const ui = await setup(t);
+  ui.click('[data-action="apply"]');
+  assert.equal(ui.get('app-goal').tagName, 'INPUT');
+  assert.ok(ui.window.document.querySelectorAll('[data-goal]').length >= 4);
+  ui.click('[data-goal="Покупка оборудования"]');
+  assert.equal(ui.get('app-goal').value, 'Покупка оборудования');
+  ui.set('app-goal', 'Запуск мастерской керамики и обучение команды');
+  await ui.submit('application-form');
+  assert.equal(ui.state().draft.goal, 'Запуск мастерской керамики и обучение команды');
+  assert.equal(ui.get('wizard-fields').querySelectorAll('[data-offer]').length, 3);
+});
+
+test('low approval estimate offers a slider, recalculates live and applies only on confirmation', async t => {
+  const ui = await setup(t);
+  ui.click('[data-action="apply"]');
+  ui.set('app-goal', 'Закупка товаров');
+  await ui.submit('application-form');
+  ui.click('[data-offer="working"]');
+  await ui.submit('application-form');
+  assert.match(ui.get('approval-indicator').textContent, /Добавьте доходы/);
+  ui.click('[data-action="sample"]');
+  ui.set('app-expenses', 1000000);
+  ui.set('app-debt', 50000);
+  assert.match(ui.get('approval-indicator').textContent, /Низкая/);
+  ui.click('[data-action="adjust-amount"]');
+  assert.equal(ui.get('amount-dialog').open, true);
+  ui.set('adjust-amount', 500000);
+  assert.match(ui.get('adjust-estimate').textContent, /Высокая/);
+  assert.equal(ui.state().draft.amount, 1500000);
+  await ui.submit('amount-adjust-form');
+  assert.equal(ui.get('amount-dialog').open, false);
+  assert.equal(ui.state().draft.amount, 500000);
+  assert.match(ui.get('approval-indicator').textContent, /Высокая/);
+  assert.equal(ui.get('app-expenses').value, '1 000 000');
+  assert.equal(ui.get('wizard-fields').querySelector('[data-action="adjust-amount"]'), null);
+});
+
+test('approval estimate remains qualitative and handles incomplete or unaffordable income', () => {
+  assert.equal(credit.approvalEstimate({...sample, revenue: ''}).level, 'unknown');
+  assert.equal(credit.approvalEstimate({...sample, expenses: 1200000}).level, 'low');
+  assert.equal(credit.approvalEstimate(sample).level, 'high');
 });
