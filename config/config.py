@@ -31,7 +31,7 @@ class LogConfig:
 @dataclass
 class CometConfig:
     api_key: str = field(default='', repr=False)
-    model: str = 'qwen3.8-flash'
+    model: str = 'deepseek-v4.1-flash'
     timeout_seconds: float = 180
 
     def __post_init__(self):
@@ -74,7 +74,7 @@ def load_config(path: str | None = None) -> Config:
         ),
         comet=CometConfig(
             api_key=env.str('COMETAPI_KEY', default='') or env.str('COMETAPI_API_KEY', default=''),
-            model=env.str('COMETAPI_MODEL', default='qwen3.8-flash'),
+            model=env.str('COMETAPI_MODEL', default='deepseek-v4.1-flash'),
             timeout_seconds=env.float('COMETAPI_TIMEOUT_SECONDS', default=180),
         ),
     )

@@ -92,6 +92,43 @@ class CreditAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['status'], 'needs_info')
         self.assertIsNone(result['assessment_token'])
 
+    async def test_equipment_assessment_caps_suggestion_to_clients_reduced_amount(self):
+        recommendations, data = await self.prepare()
+        data.update(offer_id=recommendations['offers'][1]['id'], amount=600000)
+        answer = credit.RiskResult(risk='low', reasons=['Платёж посилен'],
+            terms={'amount': 1000000, 'months': 36, 'rate': 22.9})
+        with patch.object(credit, 'ask_model', new_callable=AsyncMock, return_value=answer) as ask:
+            response = await self.client.post('/credit/assessments', json=data)
+        self.assertEqual(response.status_code, 200, response.text)
+        assessment = response.json()
+        self.assertEqual(assessment['status'], 'ready')
+        self.assertEqual(assessment['terms']['amount'], 600000)
+        self.assertAlmostEqual(assessment['terms']['payment'], credit.monthly_payment(600000, 36, 22.9))
+        sent = ask.call_args.args[1]
+        self.assertEqual(sent['selected_offer']['amount'], 600000)
+        self.assertEqual(sent['limits']['max_amount'], 600000)
+        result = await self.client.post('/credit/confirm', json={
+            'assessment_token': assessment['assessment_token'], 'data': data, 'consent': True})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()['amount'], 600000)
+        self.assertEqual(result.json()['status'], 'bank_review')
+
+    async def test_suggested_term_is_capped_to_product_limit(self):
+        _, data = await self.prepare()
+        answer = READY.model_copy(update={'terms': credit.Terms(amount=1500000, months=60, rate=24.9)})
+        result = (await self.assess(data, answer)).json()
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['terms']['months'], 36)
+        self.assertAlmostEqual(result['terms']['payment'], credit.monthly_payment(1500000, 36, 24.9))
+
+    async def test_capping_term_rechecks_payment_and_blocks_unaffordable_result(self):
+        _, data = await self.prepare()
+        data.update(expenses=1000000, debt=50000)
+        answer = READY.model_copy(update={'terms': credit.Terms(amount=1500000, months=60, rate=24.9)})
+        result = (await self.assess(data, answer)).json()
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIsNone(result['assessment_token'])
+
     async def test_financial_changes_invalidate_assessment(self):
         _, data = await self.prepare()
         result = (await self.assess(data)).json()
@@ -175,12 +212,12 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
             requests.append(request)
             return httpx.Response(200, json={'choices': [{'message': {'content': OFFERS.model_dump_json()}}]})
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        with patch.object(credit.config.comet, 'api_key', 'test-only-key'), patch.object(credit.config.comet, 'model', 'configured-qwen-id'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+        with patch.object(credit.config.comet, 'api_key', 'test-only-key'), patch.object(credit.config.comet, 'model', 'deepseek-v4.1-flash'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
             answer = await credit.ask_model('task', {'goal': 'Покупка оборудования'}, credit.GeneratedOffers)
         self.assertEqual(len(answer.offers), 2)
         self.assertEqual(str(requests[0].url), 'https://api.cometapi.com/v1/chat/completions')
         self.assertEqual(requests[0].headers['Authorization'], 'Bearer test-only-key')
-        self.assertEqual(json.loads(requests[0].content)['model'], 'configured-qwen-id')
+        self.assertEqual(json.loads(requests[0].content)['model'], 'deepseek-v4.1-flash')
 
     async def test_risk_response_does_not_require_decision_probability_or_terms(self):
         body = {'risk': 'medium', 'reasons': ['Условия требуют проверки сотрудником']}
@@ -198,7 +235,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_malformed_model_output_is_rejected_without_leaking_raw_text(self):
         for body in [{'choices': [{'message': {'content': 'not json'}}]}, {'choices': []}]:
             client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
-            with patch.object(credit.config.comet, 'api_key', 'test-only-key'), patch.object(credit.config.comet, 'model', 'configured-qwen-id'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+            with patch.object(credit.config.comet, 'api_key', 'test-only-key'), patch.object(credit.config.comet, 'model', 'deepseek-v4.1-flash'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
                 with self.assertRaises(credit.HTTPException) as error:
                     await credit.ask_model('task', {}, credit.GeneratedOffers)
                 self.assertEqual(error.exception.detail, 'CREDIT_AI_INVALID_RESPONSE')

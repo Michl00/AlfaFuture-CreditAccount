@@ -272,7 +272,7 @@ class DocumentParserTests(unittest.TestCase):
         from config.config import load_config
         with patch.dict(os.environ, {'SECRET': 'test-secret', 'COOKIE_SECURE': 'false', 'COMETAPI_KEY': 'new-test-key', 'COMETAPI_API_KEY': 'old-test-key'}, clear=True), patch('environs.Env.read_env'):
             configured = load_config()
-            self.assertEqual(configured.comet.model, 'qwen3.8-flash')
+            self.assertEqual(configured.comet.model, 'deepseek-v4.1-flash')
             self.assertEqual(configured.comet.api_key, 'new-test-key')
             os.environ['COMETAPI_KEY'] = ''
             self.assertEqual(load_config().comet.api_key, 'old-test-key')
