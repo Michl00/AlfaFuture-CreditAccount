@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from environs import Env
 
@@ -21,7 +21,6 @@ class MailConfig:
     sender: str
     starttls: bool
     reset_password_url: str
-    verification_url: str
 
 @dataclass
 class LogConfig:
@@ -30,11 +29,17 @@ class LogConfig:
     file: str
 
 @dataclass
+class CometConfig:
+    api_key: str = field(default='', repr=False)
+    model: str = ''
+
+@dataclass
 class Config:
     db: DBConfig
     log: LogConfig
     auth: AuthConfig
     mail: MailConfig
+    comet: CometConfig = field(default_factory=CometConfig)
 
 
 
@@ -61,6 +66,9 @@ def load_config(path: str | None = None) -> Config:
             sender=env.str('SMTP_FROM', default=''),
             starttls=env.bool('SMTP_STARTTLS', default=True),
             reset_password_url=env.str('RESET_PASSWORD_URL', default=''),
-            verification_url=env.str('VERIFICATION_URL', default=''),
+        ),
+        comet=CometConfig(
+            api_key=env.str('COMETAPI_API_KEY', default=''),
+            model=env.str('COMETAPI_MODEL', default=''),
         ),
     )

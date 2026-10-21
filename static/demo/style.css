@@ -426,3 +426,12 @@ main { max-width: none; padding: 0; margin: 0; }
 .adjust-value { display: block; margin-top: 14px; font-size: 30px; letter-spacing: -1px; }
 .adjust-estimate { margin: 30px 0 20px; }
 #amount-adjust-form > .button { margin-top: 22px; }
+
+.high-chance { background: #eaf6ed; color: #4d825d; }
+.estimate-label.critical { color: #c54a3c; }
+.estimate-track > span { transition: width .12s linear, background-color .18s linear; }
+#adjust-amount { touch-action: pan-y; }
+@media (prefers-reduced-motion: reduce) { .estimate-track > span { transition: none; } }
+.estimate-label { transition: color .18s linear; }
+
+.dialog-header h2, .application-reference { overflow-wrap: anywhere; }

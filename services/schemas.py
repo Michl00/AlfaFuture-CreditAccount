@@ -1,14 +1,24 @@
 from fastapi_users import schemas
-from pydantic import Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from services.services import valid_inn
 
 
-class UserRead(schemas.BaseUser[int]):
+class UserRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    email: EmailStr
+    is_active: bool
+    is_superuser: bool
     username: str            # ИНН наружу не отдаём
 
 
-class UserCreate(schemas.BaseUserCreate):
+class UserCreate(schemas.CreateUpdateDictModel):
+    model_config = ConfigDict(extra='forbid')
+    email: EmailStr
+    password: str
+    is_active: bool = True
+    is_superuser: bool = False
     username: str = Field(min_length=3, max_length=20)
     inn: str
 
@@ -21,5 +31,10 @@ class UserCreate(schemas.BaseUserCreate):
         return v
 
 
-class UserUpdate(schemas.BaseUserUpdate):
+class UserUpdate(schemas.CreateUpdateDictModel):
+    model_config = ConfigDict(extra='forbid')
+    password: str | None = None
+    email: EmailStr | None = None
+    is_active: bool | None = None
+    is_superuser: bool | None = None
     username: str | None = Field(default=None, min_length=3, max_length=20)
