@@ -44,7 +44,9 @@ Compose запускает web, API, worker и PostgreSQL 17. Миграции �
 Нужны **Python 3.14** и **Node.js ≥22.23.4**.
 
 ```sh
-./scripts/run-local.sh
+./scripts/run-local.sh # MacOS or Linux
+
+./scripts/run-local_win.sh # Windows
 ```
 
 Скрипт устанавливает зависимости, собирает frontend и запускает FastAPI. Открыть [127.0.0.1:8000/cabinet/](http://127.0.0.1:8000/cabinet/). По умолчанию используется SQLite `app.db`.
