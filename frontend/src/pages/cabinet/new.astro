@@ -16,19 +16,6 @@ import Layout from "../../layouts/ProductLayout.astro";
       Помочь с выбором ↗
     </a>
   </div>
-  <nav class="application-stepper" aria-label="Этапы заявки">
-    {["Условия", "Компания", "Проверки", "Прогноз"].map((label, i) => (
-      <button
-        type="button"
-        data-wizard-go={i}
-        disabled={i > 0}
-        aria-current={i === 0 ? "step" : undefined}
-      >
-        <span>{i + 1}</span>
-        <b>{label}</b>
-      </button>
-    ))}
-  </nav>
   <div class="product-form-layout">
     <form data-application-form class="product-form">
       <section class="product-card" data-wizard-step="0">
@@ -246,19 +233,36 @@ import Layout from "../../layouts/ProductLayout.astro";
       </div>
     </form>
     <aside class="product-form-summary">
-      <div class="product-card">
-        <span class="product-step">ВАША ЗАЯВКА</span>
-        <h3 data-summary-company></h3>
-        <div data-live-summary></div>
-        <hr />
-        <p class="field-help">
-          Действующие обязательства будут учтены автоматически. Ставка и решение
-          рассчитываются по данным компании.
-        </p>
-        <a class="credit-text-link" href="/cabinet/assistant/">
-          Обсудить задачу с помощником →
-        </a>
-      </div>
+      <nav class="application-stepper" aria-label="Этапы заявки">
+        {["Условия", "Компания", "Проверки", "Прогноз"].map((label, i) => (
+          <button
+            type="button"
+            data-wizard-go={i}
+            disabled={i > 0}
+            aria-current={i === 0 ? "step" : undefined}
+          >
+            <span>{i + 1}</span>
+            <b>{label}</b>
+          </button>
+        ))}
+      </nav>
+
+      <details class="product-summary-details">
+        <summary>Параметры заявки</summary>
+        <div class="product-card">
+          <span class="product-step">ВАША ЗАЯВКА</span>
+          <h3 data-summary-company></h3>
+          <div data-live-summary></div>
+          <hr />
+          <p class="field-help">
+            Действующие обязательства будут учтены автоматически. Ставка и
+            решение рассчитываются по данным компании.
+          </p>
+          <a class="credit-text-link" href="/cabinet/assistant/">
+            Обсудить задачу с помощником →
+          </a>
+        </div>
+      </details>
     </aside>
   </div>
   <section data-assessment hidden class="product-results"></section>

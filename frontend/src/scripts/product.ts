@@ -83,16 +83,23 @@ async function api(
   data?: unknown,
   headers: Dict = {},
 ): Promise<any> {
-  const response = await fetch("/api/v1" + path, {
-    method,
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRF-Token": csrf,
-      ...headers,
-    },
-    ...(data === undefined ? {} : { body: JSON.stringify(data) }),
-  });
+  let response: Response;
+  try {
+    response = await fetch("/api/v1" + path, {
+      method,
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": csrf,
+        ...headers,
+      },
+      ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+    });
+  } catch {
+    throw new Error(
+      "Не удалось связаться с сервером. Проверьте соединение и повторите действие.",
+    );
+  }
   let result: Dict;
   try {
     result = await response.json();
@@ -168,13 +175,11 @@ async function overview() {
     header(
       account.role === "staff"
         ? "Пульс кредитного конвейера"
-        : "Финансирование бизнеса",
+        : "Кредитные продукты",
       account.name,
     ) +
-    `<div class="product-stats">${stats.map(([s, n]) => `<div class="product-stat"><small>${s}</small><strong>${n}</strong></div>`).join("")}</div>` +
-    (account.role === "staff"
-      ? `<section class="product-hero"><div><p class="product-eyebrow">РАБОЧЕЕ МЕСТО АНАЛИТИКА</p><h2>Данные, риски и решения — в одном окне</h2><p>Проверьте основания автоматического решения, уточните сведения и предложите альтернативные условия.</p><a href="/cabinet/bank/" class="button button--primary">Открыть очередь →</a></div></section>`
-      : `<section class="product-hero"><div><p class="product-eyebrow">УМНОЕ ФИНАНСИРОВАНИЕ</p><h2>Посмотрите на бизнес<br />после кредита</h2><p>Сравните платёж и переплату, проверьте сезонность и узнайте, что будет, если выручка снизится.</p><a href="/cabinet/new/" class="button button--primary">Подобрать финансирование →</a></div><img src="/assets/business-credit.png" alt="" /></section>`) +
+    `<nav class="credit-product-tabs" aria-label="Кредитные разделы"><a href="/cabinet/" aria-current="page">Продукты и заявки</a><a href="/cabinet/documents/">Документы</a><a href="/cabinet/company/">Данные компании</a></nav><div class="credit-product-toolbar"><a class="credit-company-filter" href="/cabinet/company/">${esc(account.name)} <span aria-hidden="true">⌄</span></a>${account.role === "staff" ? '<a class="button button--secondary" href="/cabinet/bank/">Открыть рабочую очередь →</a>' : '<a class="button button--primary" href="/cabinet/new/">Новая заявка</a><a class="credit-text-link" href="/cabinet/assistant/">Подобрать с помощником ↗</a>'}</div>` +
+    `<dl class="product-stats">${stats.map(([s, n]) => `<div class="product-stat"><dt>${s}</dt><dd>${n}</dd></div>`).join("")}</dl>` +
     `<div class="product-section-heading"><h2>Последние заявки</h2><a class="credit-text-link" href="/cabinet/applications/">Все заявки →</a></div>${table(items.slice(0, 5))}<div data-activity-feed></div>` +
     (account.role === "client"
       ? `<div class="product-section-heading"><h2>Продукты для вашей задачи</h2><span class="product-pill">ДЕМОНСТРАЦИОННЫЕ УСЛОВИЯ</span></div><div class="catalog-filter" role="group" aria-label="Категории финансирования"><button data-catalog-filter="all" aria-pressed="true">Все продукты</button>${[...new Set(products.map((p) => p.group))].map((group) => `<button data-catalog-filter="${esc(group)}" aria-pressed="false">${esc(group)}</button>`).join("")}</div><div class="catalog-grid">${products.map((p) => `<article class="catalog-card" data-product-group="${esc(p.group)}"><h3>${esc(p.name)}</h3><p>${esc(p.description)}</p><div class="catalog-rate">от ${p.rate}% <small>· до ${p.max_months} мес.</small></div><a href="/cabinet/new/?product=${p.id}">Рассчитать условия →</a></article>`).join("")}</div>`
@@ -237,7 +242,7 @@ function reviewHTML(review: Dict, retry = false) {
     request_info: "Нужны сведения",
     wait_source: "Нужно дождаться источника",
   };
-  return `${retry && review.mode !== "llm" ? '<button type="button" class="credit-text-link" data-review-retry>Повторить ИИ-оценку</button>' : ""}<div class="review-heading"><h2>Заключение по данным заявки</h2><span class="review-model">${esc(review.mode === "llm" ? review.model : "Расчёт по правилам · ИИ недоступен")}</span></div><p class="review-text">${esc(review.text)}</p>${review.text_origin==="server_grounded"?'<p class="field-help">Показано проверенное резюме. Числа в основаниях подставлены из расчёта сервера.</p>':""}<p class="field-help">${esc(names[review.recommendation] || "Консультационное заключение")}</p>${(review.findings || []).map((f: Dict) => `<div class="review-finding">${esc(f.text)}<small>Основания: ${esc(f.references.join(" · "))}</small></div>`).join("")}<details><summary>Версия и привязка заключения</summary><p class="field-help">${esc(review.policy_version || "")} · ${esc(review.catalog_version || "")}<br />SHA-256 фактов: ${esc(review.facts_hash || "")}<br />${esc(review.decision_authority || "")}</p></details>`;
+  return `${retry && review.mode !== "llm" ? '<button type="button" class="credit-text-link" data-review-retry>Повторить ИИ-оценку</button>' : ""}<div class="review-heading"><h2>Заключение по данным заявки</h2><span class="review-model">${esc(review.mode === "llm" ? review.model : "Расчёт по правилам · ИИ недоступен")}</span></div><p class="review-text">${esc(review.text)}</p>${review.text_origin === "server_grounded" ? '<p class="field-help">Показано проверенное резюме. Числа в основаниях подставлены из расчёта сервера.</p>' : ""}<p class="field-help">${esc(names[review.recommendation] || "Консультационное заключение")}</p>${(review.findings || []).map((f: Dict) => `<div class="review-finding">${esc(f.text)}<small>Основания: ${esc(f.references.join(" · "))}</small></div>`).join("")}<details><summary>Версия и привязка заключения</summary><p class="field-help">${esc(review.policy_version || "")} · ${esc(review.catalog_version || "")}<br />SHA-256 фактов: ${esc(review.facts_hash || "")}<br />${esc(review.decision_authority || "")}</p></details>`;
 }
 function sourceFacts(check: Dict) {
   const labels: Dict = {
@@ -811,7 +816,9 @@ async function detail() {
           $("[data-explanation-mode]")!.textContent =
             answer.mode === "llm"
               ? answer.model + " · открытые веса"
-              : answer.mode === "facts" ? "Резюме по данным расчёта" : "Помощник по правилам · LLM недоступна";
+              : answer.mode === "facts"
+                ? "Резюме по данным расчёта"
+                : "Помощник по правилам · LLM недоступна";
         }
       })
       .catch(() => {
@@ -909,7 +916,7 @@ function chatBubble(text: string, user = false, mode = "") {
   $("[data-chat]")!.append(div);
   div.scrollIntoView({ block: "nearest" });
 }
-function answerBubble(a: Dict) {
+function answerBubble(a: Dict, interactive = true) {
   chatBubble(
     a.text,
     false,
@@ -918,28 +925,93 @@ function answerBubble(a: Dict) {
       : "Помощник по правилам · LLM недоступна",
   );
   const root = $("[data-chat]")!;
-  for (const q of a.questions || []) {
-    const el = document.createElement("div");
-    el.className = "chat-bubble";
-    el.textContent = q.text;
-    const options = document.createElement("div");
-    options.className = "chat-suggestions";
-    for (const o of q.options) {
-      const b = document.createElement("button");
-      b.textContent = o;
-      b.onclick = () => {
-        if (chatPending) return;
-        options
-          .querySelectorAll<HTMLButtonElement>("button")
-          .forEach((button) => (button.disabled = true));
-        const input = $<HTMLTextAreaElement>('[name="message"]')!;
-        input.value = q.text + ": " + o;
-        $<HTMLFormElement>("[data-chat-form]")!.requestSubmit();
-      };
-      options.append(b);
-    }
-    el.append(options);
-    root.append(el);
+  const questions = (a.questions || []).filter(
+    (q: Dict) => q.text && q.options?.length,
+  );
+  if (questions.length) {
+    const survey = document.createElement("form");
+    survey.className = "chat-survey";
+    survey.dataset.chatSurvey = "";
+    const title = document.createElement("h3");
+    title.textContent = "Уточним вашу задачу";
+    const hint = document.createElement("p");
+    hint.className = "field-help";
+    hint.textContent =
+      "Выберите по одному ответу на каждый вопрос, затем отправьте опрос целиком.";
+    survey.append(title, hint);
+    const groupId = crypto.randomUUID();
+    questions.forEach((q: Dict, index: number) => {
+      const fieldset = document.createElement("fieldset");
+      const legend = document.createElement("legend");
+      legend.textContent = `${index + 1}. ${q.text}`;
+      fieldset.append(legend);
+      const options = document.createElement("div");
+      options.className = "chat-survey-options";
+      q.options.forEach((option: string) => {
+        const label = document.createElement("label");
+        const radio = document.createElement("input");
+        Object.assign(radio, {
+          type: "radio",
+          name: `survey-${groupId}-${index}`,
+          value: option,
+          required: true,
+        });
+        const text = document.createElement("span");
+        text.textContent = option;
+        label.append(radio, text);
+        options.append(label);
+      });
+      fieldset.append(options);
+      fieldset.disabled = !interactive;
+      survey.append(fieldset);
+    });
+    const progress = document.createElement("p");
+    progress.className = "chat-survey-progress";
+    progress.setAttribute("role", "status");
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "button button--primary";
+    submit.textContent = interactive ? "Отправить ответы" : "Опрос из истории";
+    submit.disabled = true;
+    survey.append(progress, submit);
+    survey.onchange = () => {
+      const count = survey.querySelectorAll("input:checked").length;
+      progress.textContent = `Отвечено ${count} из ${questions.length}`;
+      submit.disabled = count !== questions.length || chatPending;
+    };
+    survey.onsubmit = async (event) => {
+      event.preventDefault();
+      if (chatPending || !survey.reportValidity()) return;
+      const answers = new FormData(survey);
+      const message =
+        "Ответы на опрос:\n" +
+        questions
+          .map(
+            (q: Dict, i: number) =>
+              `${i + 1}. ${q.text}: ${answers.get(`survey-${groupId}-${i}`)}`,
+          )
+          .join("\n");
+      if (message.length > 2000) {
+        error(
+          new Error(
+            "Ответы слишком длинные. Отправьте их отдельным сообщением.",
+          ),
+        );
+        return;
+      }
+      await busy(submit, async () => {
+        await sendChatMessage(message);
+      });
+      if (survey.dataset.completed === "true") {
+        submit.disabled = true;
+        submit.textContent = "Ответы отправлены";
+      }
+    };
+    progress.textContent = interactive
+      ? `Отвечено 0 из ${questions.length}`
+      : "Этот опрос сохранён в истории переписки.";
+    if (!interactive) survey.dataset.completed = "true";
+    root.append(survey);
   }
   if (a.proposal?.product && (a.turn_id || a.id)) {
     const proposal = a.proposal;
@@ -967,35 +1039,80 @@ function answerBubble(a: Dict) {
     root.append(link);
   }
 }
+async function sendChatMessage(message: string) {
+  if (chatPending || !message.trim()) return;
+  chatPending = true;
+  document
+    .querySelectorAll<HTMLFormElement>("[data-chat-survey]")
+    .forEach((survey) => {
+      survey.querySelectorAll("fieldset").forEach((fieldset) => {
+        fieldset.disabled = true;
+      });
+      survey.querySelector<HTMLButtonElement>(
+        'button[type="submit"]',
+      )!.disabled = true;
+    });
+  try {
+    const application_id = new URLSearchParams(location.search).get(
+      "application",
+    );
+    const answer = await api("/chat", "POST", { message, application_id });
+    // A failed request keeps the selected answers and typed message available.
+    document
+      .querySelectorAll<HTMLFormElement>("[data-chat-survey]")
+      .forEach((survey) => {
+        survey.dataset.completed = "true";
+        survey.querySelectorAll("fieldset").forEach((fieldset) => {
+          fieldset.disabled = true;
+        });
+        const button = survey.querySelector<HTMLButtonElement>(
+          'button[type="submit"]',
+        )!;
+        button.disabled = true;
+        button.textContent = "Опрос завершён";
+      });
+    chatBubble(message, true);
+    answerBubble(answer);
+  } finally {
+    chatPending = false;
+    document
+      .querySelectorAll<HTMLFormElement>("[data-chat-survey]")
+      .forEach((survey) => {
+        if (survey.dataset.completed === "true") return;
+        survey.querySelectorAll("fieldset").forEach((fieldset) => {
+          fieldset.disabled = false;
+        });
+        survey.querySelector<HTMLButtonElement>(
+          'button[type="submit"]',
+        )!.disabled =
+          survey.querySelectorAll("input:checked").length !==
+          survey.querySelectorAll("fieldset").length;
+      });
+  }
+}
 async function chat() {
   const history = await api("/chat");
   if (!history.length)
     chatBubble(
       "Расскажите о задаче бизнеса: что хотите профинансировать и откуда планируете возвращать средства? Если пока не знаете, начнём с короткого опроса.",
     );
-  for (const turn of history) {
+  history.forEach((turn: Dict, index: number) => {
     chatBubble(turn.question, true);
-    answerBubble({ ...turn.answer, turn_id: turn.id });
-  }
+    answerBubble(
+      { ...turn.answer, turn_id: turn.id },
+      index === history.length - 1,
+    );
+  });
   const form = $<HTMLFormElement>("[data-chat-form]")!;
-  form.onsubmit = (e) => {
-    e.preventDefault();
+  form.onsubmit = (event) => {
+    event.preventDefault();
     if (chatPending) return;
+    const input = $<HTMLTextAreaElement>('[name="message"]')!;
+    const message = input.value.trim();
+    if (!message) return;
     busy(form.querySelector("button")!, async () => {
-      chatPending = true;
-      try {
-        const input = $<HTMLTextAreaElement>('[name="message"]')!;
-        const message = input.value.trim();
-        if (!message) return;
-        chatBubble(message, true);
-        input.value = "";
-        const application_id = new URLSearchParams(location.search).get(
-          "application",
-        );
-        answerBubble(await api("/chat", "POST", { message, application_id }));
-      } finally {
-        chatPending = false;
-      }
+      await sendChatMessage(message);
+      if (input.value.trim() === message) input.value = "";
     });
   };
   $$("[data-prompt]").forEach(
@@ -1029,10 +1146,50 @@ async function documents() {
  <section class="product-card"><h2>Демонстрационные шаблоны</h2><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Документ</th><th>Источник</th><th>Тип</th></tr></thead><tbody>${templates.documents.map((d: Dict) => `<tr><td>${esc(d.name)}</td><td>${esc(d.source)}</td><td>Синтетический пакет</td></tr>`).join("")}</tbody></table></div><p class="field-help" style="margin-top:20px">Шаблоны прикладываются одной кнопкой на шаге «Проверки». Сценарий расхождения позволяет сравнить разные значения в анкете и отчётности.</p><a class="button button--primary" href="/cabinet/new/">Добавить к новой заявке →</a></section>`;
 }
 async function init() {
-  $("[data-menu]")!.onclick = () => {
-    const opened = $("#navigation")!.classList.toggle("is-open");
-    $("[data-menu]")!.setAttribute("aria-expanded", String(opened));
+  const navigation = $("#navigation")!;
+  const menu = $("[data-menu]")!;
+  const mobileNavigation = matchMedia("(max-width: 760px)");
+  function closeNavigation() {
+    const hadFocus = navigation.contains(document.activeElement);
+    navigation.classList.remove("is-open");
+    menu.setAttribute("aria-expanded", "false");
+    navigation.inert = mobileNavigation.matches;
+    if (hadFocus) menu.focus();
+  }
+  navigation.inert = mobileNavigation.matches;
+  mobileNavigation.addEventListener("change", closeNavigation);
+  menu.onclick = () => {
+    if (menu.getAttribute("aria-expanded") === "true") return closeNavigation();
+    navigation.inert = false;
+    navigation.classList.add("is-open");
+    menu.setAttribute("aria-expanded", "true");
+    $("[data-menu-close]")?.focus();
   };
+  $("[data-menu-close]")!.onclick = closeNavigation;
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeNavigation();
+    if (
+      event.key !== "Tab" ||
+      !mobileNavigation.matches ||
+      menu.getAttribute("aria-expanded") !== "true"
+    )
+      return;
+    const targets = Array.from(
+      navigation.querySelectorAll<HTMLElement>(
+        "a:not([hidden]),button:not([hidden])",
+      ),
+    );
+    const first = targets[0],
+      last = targets[targets.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last?.focus();
+    }
+    if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first?.focus();
+    }
+  });
   $$("[data-login-as]").forEach(
     (b) =>
       (b.onclick = () =>
@@ -1107,6 +1264,23 @@ async function init() {
       break;
   }
 }
-init().catch(error);
+function syncFieldLabels() {
+  document.querySelectorAll<HTMLElement>(".credit-field").forEach((label) => {
+    const control = label.querySelector<
+      HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+    >("input,select,textarea");
+    if (!control) return;
+    label.classList.toggle("is-filled", control.value.length > 0);
+    const caption = label.querySelector<HTMLElement>(":scope > span");
+    if (caption) caption.title = caption.textContent?.trim() || "";
+  });
+}
+document.addEventListener("input", syncFieldLabels);
+document.addEventListener("change", syncFieldLabels);
+new MutationObserver((records) => {
+  if (records.some((record) => record.addedNodes.length)) syncFieldLabels();
+}).observe(document.querySelector("main")!, { childList: true, subtree: true });
+syncFieldLabels();
+init().then(syncFieldLabels).catch(error);
 
 export {};

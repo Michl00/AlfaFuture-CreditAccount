@@ -1,54 +1,207 @@
 ---
-import '../styles/global.css';
-import '../styles/cabinet.css';
-import '../styles/product.css';
-import { Icon } from '../components/ui';
-interface Props { title: string; screen: string }
+import "../styles/global.css";
+import "../styles/cabinet.css";
+import "../styles/product.css";
+import "../styles/alfa-product.css";
+import { Icon } from "../components/ui";
+interface Props {
+  title: string;
+  screen: string;
+}
 const { title, screen } = Astro.props;
 ---
+
 <!doctype html>
 <html lang="ru">
-<head>
-  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="robots" content="noindex,nofollow" /><meta name="theme-color" content="#f2f3f5" />
-  <title>{title} · Альфа Future</title><link rel="icon" href="/favicon.svg" />
-</head>
-<body class="credit-app" data-screen={screen}>
-  <a class="skip-link" href="#main">Перейти к содержимому</a>
-  <aside class="credit-sidebar" id="navigation">
-    <a class="credit-brand" href="/cabinet/"><span class="alfa-mark">А</span><span>Альфа-Бизнес<small>Кредитный кабинет · прототип</small></span></a>
-    <a class="credit-create" href="/cabinet/new/" data-client-nav><span>+</span> Новая заявка</a>
-    <span class="credit-menu-caption">ФИНАНСИРОВАНИЕ</span>
-    <nav aria-label="Основные разделы">
-      <a href="/cabinet/" class:list={[{'is-active':screen==='overview'}]}><Icon name="wallet" size={18} />Обзор</a>
-      <a href="/cabinet/applications/" class:list={[{'is-active':screen==='applications'}]}><Icon name="document" size={18} />Заявки <b class="sidebar-count" data-count>0</b></a>
-      <a href="/cabinet/assistant/" class:list={[{'is-active':screen==='assistant'}]}><Icon name="chat" size={18} />Умный помощник</a>
-      <a href="/cabinet/documents/" class:list={[{'is-active':screen==='documents'}]} data-client-nav><Icon name="upload" size={18} />Документы</a>
-      <a href="/cabinet/company/" class:list={[{'is-active':screen==='company'}]}><Icon name="company" size={18} />Профиль</a>
-      <a href="/cabinet/bank/" data-staff-nav hidden class:list={[{'is-active':screen==='bank'}]}><Icon name="shield" size={18} />Рабочая очередь</a>
-    </nav>
-    <div class="credit-sidebar-bottom"><span class="product-sandbox">● ДЕМОНСТРАЦИОННЫЙ СТЕНД</span><p>Данные и операции синтетические.<br />Реальные средства не выдаются.</p><a href="/components/">Библиотека интерфейса ↗</a></div>
-  </aside>
-  <div class="credit-workspace">
-    <header class="product-topbar"><button class="icon-button product-menu" aria-label="Открыть меню" aria-expanded="false" data-menu>☰</button><span class="product-breadcrumb">Бизнес / Финансирование</span><div class="product-account"><span class="account-avatar" data-avatar>А</span><span data-account>Загрузка кабинета…</span><button class="credit-text-link" data-logout hidden>Выйти</button></div></header>
-    <main id="main" class="credit-main">
-      <div class="product-error" role="alert" data-error hidden></div>
-      <section data-login hidden class="login-wrap">
-        <p class="product-eyebrow">АЛЬФА FUTURE / КРЕДИТНЫЙ КОНВЕЙЕР</p>
-        <h1>Финансирование,<br />которое понимает бизнес</h1>
-        <p class="login-lead">От идеи до решения — в одном кабинете. Сравните условия, проверьте денежный поток и посмотрите на заявку со стороны банка.</p>
-        <div class="login-cards">
-          <button data-login-as="ip" class="login-card"><span class="login-symbol">ИП</span><small>ДЛЯ ПРЕДПРИНИМАТЕЛЯ</small><h2>Мой бизнес</h2><p>ИП Алексеева Мария<br />Подбор, заявки и прогноз</p><b>Войти как ИП →</b></button>
-          <button data-login-as="ooo" class="login-card"><span class="login-symbol">ООО</span><small>ДЛЯ КОМПАНИИ</small><h2>Растём вместе</h2><p>ООО «Пример роста»<br />Финансирование развития</p><b>Войти как ООО →</b></button>
-          <button data-login-as="bank" class="login-card login-card-bank"><span class="login-symbol">А</span><small>ДЛЯ СОТРУДНИКА БАНКА</small><h2>Всё под контролем</h2><p>Кредитный аналитик<br />Риски, основания и решения</p><b>Открыть рабочее место →</b></button>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="theme-color" content="#f2f3f5" />
+    <link
+      rel="preload"
+      href="/assets/alfa-regular.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <title>{title} · Альфа Future</title>
+    <link rel="icon" href="/favicon.svg" />
+  </head>
+  <body class="credit-app" data-screen={screen}>
+    <a class="skip-link" href="#main">
+      Перейти к содержимому
+    </a>
+    <aside class="credit-sidebar" id="navigation">
+      <button
+        type="button"
+        class="icon-button product-menu-close"
+        aria-label="Закрыть меню"
+        data-menu-close
+      >
+        <Icon name="close" size={18} />
+      </button>
+      <a class="credit-brand" href="/cabinet/">
+        <span class="alfa-mark">А</span>
+        <span>
+          Альфа-Бизнес<small>Кредитный кабинет · прототип</small>
+        </span>
+      </a>
+      <a class="credit-create" href="/cabinet/new/" data-client-nav>
+        <span>+</span> Новая заявка
+      </a>
+      <div class="product-account">
+        <span class="account-avatar" data-avatar>
+          А
+        </span>
+        <span data-account>Загрузка кабинета…</span>
+        <button class="credit-text-link" data-logout hidden>
+          Выйти
+        </button>
+      </div>
+      <span class="credit-menu-caption">МОИ СЕРВИСЫ</span>
+      <nav aria-label="Основные разделы">
+        <a
+          href="/cabinet/"
+          class:list={[{ "is-active": screen === "overview" }]}
+        >
+          <Icon name="wallet" size={18} />
+          Кредитные продукты
+        </a>
+        <a
+          href="/cabinet/applications/"
+          class:list={[{ "is-active": screen === "applications" }]}
+        >
+          <Icon name="document" size={18} />
+          Заявки{" "}
+          <b class="sidebar-count" data-count>
+            0
+          </b>
+        </a>
+        <a
+          href="/cabinet/assistant/"
+          class:list={[{ "is-active": screen === "assistant" }]}
+        >
+          <Icon name="chat" size={18} />
+          Умный помощник
+        </a>
+        <a
+          href="/cabinet/documents/"
+          class:list={[{ "is-active": screen === "documents" }]}
+          data-client-nav
+        >
+          <Icon name="upload" size={18} />
+          Документы
+        </a>
+        <a
+          href="/cabinet/company/"
+          class:list={[{ "is-active": screen === "company" }]}
+        >
+          <Icon name="company" size={18} />
+          Профиль
+        </a>
+        <a
+          href="/cabinet/bank/"
+          data-staff-nav
+          hidden
+          class:list={[{ "is-active": screen === "bank" }]}
+        >
+          <Icon name="shield" size={18} />
+          Рабочая очередь
+        </a>
+      </nav>
+      <div class="credit-sidebar-bottom">
+        <span class="product-sandbox">● ДЕМОНСТРАЦИОННЫЙ СТЕНД</span>
+        <p>
+          Данные и операции синтетические.
+          <br />
+          Реальные средства не выдаются.
+        </p>
+        <a href="/cabinet/components/">Компоненты кабинета ↗</a>
+        <a href="/cabinet/design/">Референсы дизайна ↗</a>
+      </div>
+    </aside>
+    <div class="credit-workspace">
+      <header class="product-topbar">
+        <button
+          class="icon-button product-menu"
+          aria-label="Открыть меню"
+          aria-expanded="false"
+          aria-controls="navigation"
+          data-menu
+        >
+          ☰
+        </button>
+        <span class="product-breadcrumb">Кредитные продукты</span>
+      </header>
+      <main id="main" class="credit-main">
+        <div class="product-error" role="alert" data-error hidden></div>
+        <section data-login hidden class="login-wrap">
+          <p class="product-eyebrow">АЛЬФА FUTURE / КРЕДИТНЫЙ КОНВЕЙЕР</p>
+          <h1>
+            Финансирование,
+            <br />
+            которое понимает бизнес
+          </h1>
+          <p class="login-lead">
+            От идеи до решения — в одном кабинете. Сравните условия, проверьте
+            денежный поток и посмотрите на заявку со стороны банка.
+          </p>
+          <div class="login-cards">
+            <button data-login-as="ip" class="login-card">
+              <span class="login-symbol">ИП</span>
+              <small>ДЛЯ ПРЕДПРИНИМАТЕЛЯ</small>
+              <h2>Мой бизнес</h2>
+              <p>
+                ИП Алексеева Мария
+                <br />
+                Подбор, заявки и прогноз
+              </p>
+              <b>Войти как ИП →</b>
+            </button>
+            <button data-login-as="ooo" class="login-card">
+              <span class="login-symbol">ООО</span>
+              <small>ДЛЯ КОМПАНИИ</small>
+              <h2>Растём вместе</h2>
+              <p>
+                ООО «Пример роста»
+                <br />
+                Финансирование развития
+              </p>
+              <b>Войти как ООО →</b>
+            </button>
+            <button data-login-as="bank" class="login-card login-card-bank">
+              <span class="login-symbol">А</span>
+              <small>ДЛЯ СОТРУДНИКА БАНКА</small>
+              <h2>Всё под контролем</h2>
+              <p>
+                Кредитный аналитик
+                <br />
+                Риски, основания и решения
+              </p>
+              <b>Открыть рабочее место →</b>
+            </button>
+          </div>
+          <div class="product-note">
+            Демоаккаунты общие: созданные заявки видны другим участникам
+            выбранного профиля. Используйте только вымышленные данные. Это
+            учебный прототип, не официальный сервис банка.
+          </div>
+        </section>
+        <div data-workspace hidden>
+          <slot />
         </div>
-        <div class="product-note">Демоаккаунты общие: созданные заявки видны другим участникам выбранного профиля. Используйте только вымышленные данные. Это учебный прототип, не официальный сервис банка.</div>
-      </section>
-      <div data-workspace hidden><slot /></div>
-    </main>
-    <footer class="credit-footer"><span>Альфа Future · Учебный прототип</span><span>Синтетические проверки · Открытые веса Qwen · Проверяемые расчёты</span></footer>
-  </div>
-  <div class="toast" role="status" aria-live="polite" hidden></div>
-  <script>import '../scripts/product';</script>
-</body>
+      </main>
+      <footer class="credit-footer">
+        <span>Альфа Future · Учебный прототип</span>
+        <span>
+          Синтетические проверки · Открытые веса Qwen · Проверяемые расчёты
+        </span>
+      </footer>
+    </div>
+    <div class="toast" role="status" aria-live="polite" hidden></div>
+    <script>
+      import "../scripts/product";
+    </script>
+  </body>
 </html>

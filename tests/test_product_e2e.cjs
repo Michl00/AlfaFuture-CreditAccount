@@ -69,11 +69,30 @@ const base=process.env.E2E_BASE_URL||'http://127.0.0.1:8000';
  await page.goto(base+'/cabinet/assistant/');
  await page.locator('[data-chat-form]').waitFor();
  // The E2E suite validates UI without requiring paid model access.
- await page.route('**/api/v1/chat',route=>route.request().method()==='POST'?route.fulfill({json:{text:'Тестовый ответ помощника',mode:'rules',model:null,questions:[{text:'Какая цель финансирования?',options:['Оборудование','Запасы']}]}}):route.continue());
+ let chatPosts=[];
+ await page.route('**/api/v1/chat',route=>{
+  if(route.request().method()!=='POST') return route.continue();
+  chatPosts.push(route.request().postDataJSON());
+  return route.fulfill({json:{text:'Тестовый ответ помощника',mode:'rules',model:null,questions:[
+   {text:'Какая цель финансирования?',options:['Оборудование','Запасы']},
+   {text:'Как поступает выручка?',options:['Равномерно','Сезонно']}
+  ]}});
+ });
  await page.locator('[name="message"]').fill('Помоги выбрать финансирование');
  await page.locator('[data-chat-form] button').click();
- await page.locator('.chat-bubble').filter({hasText:'Тестовый ответ помощника'}).waitFor();
- await page.locator('.chat-bubble').filter({hasText:'Какая цель финансирования?'}).waitFor();
+ await page.locator('[data-chat-survey]').last().waitFor();
+ const surveyIndex=(await page.locator('[data-chat-survey]').count())-1;
+ const survey=page.locator('[data-chat-survey]').nth(surveyIndex);
+ await survey.getByRole('radio',{name:'Оборудование',exact:true}).check();
+ assert.equal(chatPosts.length,1,'Choosing an answer must not send a message');
+ assert(!(await survey.getByRole('button',{name:'Отправить ответы',exact:true}).isEnabled()));
+ await survey.getByRole('radio',{name:'Сезонно',exact:true}).check();
+ assert.equal(chatPosts.length,1,'All answers must await explicit submission');
+ await survey.getByRole('button',{name:'Отправить ответы',exact:true}).click();
+ await survey.getByRole('button',{name:'Ответы отправлены',exact:true}).waitFor();
+ assert.equal(chatPosts.length,2);
+ assert(chatPosts[1].message.includes('Оборудование')&&chatPosts[1].message.includes('Сезонно'));
+ assert(!(await survey.getByRole('button',{name:'Ответы отправлены',exact:true}).isEnabled()));
  const mobile=await browser.newPage({viewport:{width:390,height:844}});
  mobile.on('pageerror',e=>errors.push(e.message));
  await mobile.goto(base+'/cabinet/');
