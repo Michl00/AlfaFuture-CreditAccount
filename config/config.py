@@ -53,7 +53,7 @@ def load_config(path: str | None = None) -> Config:
     env.read_env(path)
 
     return Config(
-        db=DBConfig(url="sqlite+aiosqlite:///./app.db"),
+        db=DBConfig(url=env.str("DATABASE_URL", default="sqlite+aiosqlite:///./app.db")),
         log=LogConfig(
             level = "DEBUG",
             format = "[%(asctime)s] #%(levelname)8s %(name)s -%(filename)s:%(lineno)d %(message)s",

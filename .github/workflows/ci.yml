@@ -1,0 +1,52 @@
+name: Verify credit conveyor
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: conveyor
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: conveyor
+        ports: ['5432:5432']
+        options: --health-cmd='pg_isready -U conveyor' --health-interval=5s --health-timeout=3s --health-retries=15
+    env:
+      SECRET: ci-synthetic-secret-at-least-thirty-two-characters
+      COOKIE_SECURE: 'false'
+      TEST_DATABASE_URL: postgresql+asyncpg://conveyor:test-password@localhost:5432/conveyor
+      DATABASE_URL: postgresql+asyncpg://conveyor:test-password@localhost:5432/conveyor
+      DEMO_MODE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.14'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '24.15.0', cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - run: pip install -r requirements.lock
+      - run: python -m unittest discover -s tests -q
+      - run: alembic upgrade head
+      - run: alembic check
+      - run: npm ci --prefix frontend
+      - run: npm run build --prefix frontend
+      - run: docker compose config --quiet
+      - run: docker compose build
+      - run: npx --prefix frontend playwright install --with-deps chromium
+      - name: Browser conveyor scenario
+        run: |
+          uvicorn main:app --host 127.0.0.1 --port 8000 > /tmp/credit-api.log 2>&1 &
+          api_pid=$!
+          trap 'kill "$api_pid"' EXIT
+          python - <<'PYCODE'
+          import time, urllib.request
+          for attempt in range(30):
+              try:
+                  urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')
+                  break
+              except OSError:
+                  time.sleep(1)
+          else:
+              raise RuntimeError('API failed to start')
+          PYCODE
+          node tests/test_product_e2e.cjs

@@ -1,0 +1,59 @@
+name: alfa-future
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: conveyor
+      POSTGRES_USER: conveyor
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-local-synthetic-data-only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U conveyor -d conveyor']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://conveyor:${DB_PASSWORD:-local-synthetic-data-only}@postgres:5432/conveyor
+      SECRET: ${SECRET:-local-demo-secret-please-change-before-public-hosting}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DEMO_MODE: 'true'
+      AUTO_CREATE_SCHEMA: 'false'
+      AI_WORKER_EMBEDDED: 'false'
+      COMETAPI_KEY: ${COMETAPI_KEY:-}
+      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-qwen3-235b-a22b}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  worker:
+    build: .
+    command: [python, -m, services.platform.worker]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://conveyor:${DB_PASSWORD:-local-synthetic-data-only}@postgres:5432/conveyor
+      SECRET: ${SECRET:-local-demo-secret-please-change-before-public-hosting}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COMETAPI_KEY: ${COMETAPI_KEY:-}
+      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-qwen3-235b-a22b}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+  web:
+    build: ./frontend
+    ports:
+      - '127.0.0.1:8080:80'
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  postgres_data:

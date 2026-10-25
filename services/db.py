@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import Depends
 from fastapi_users.db import SQLAlchemyBaseUserTable, SQLAlchemyUserDatabase
-from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, JSON, LargeBinary, MetaData, event, inspect
+from sqlalchemy import CheckConstraint, ForeignKey, BigInteger, Integer, String, JSON, LargeBinary, MetaData, event, inspect
 from sqlalchemy.schema import CreateTable, CreateIndex
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -28,7 +28,7 @@ class User(SQLAlchemyBaseUserTable[int], Base):
         CheckConstraint("length(username) BETWEEN 3 AND 20", name="ck_username_len"),
         CheckConstraint(
             "inn NOT GLOB '*[^0-9]*' AND length(inn) IN (10, 12)", name="ck_inn"
-        ),
+        ).ddl_if(dialect="sqlite"),
     )
 
 
@@ -45,7 +45,7 @@ class UploadedDocument(Base):
     content: Mapped[bytes] = mapped_column(LargeBinary)
     fields: Mapped[dict] = mapped_column(JSON)
     warnings: Mapped[list] = mapped_column(JSON)
-    created_at: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(BigInteger)
 
 
 class CreditAssessment(Base):
@@ -55,7 +55,7 @@ class CreditAssessment(Base):
     fingerprint: Mapped[str] = mapped_column(String(64))
     payload: Mapped[dict] = mapped_column(JSON)
     result: Mapped[dict] = mapped_column(JSON)
-    created_at: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(BigInteger)
 
 
 class CreditApplication(Base):
@@ -69,8 +69,8 @@ class CreditApplication(Base):
     payload: Mapped[dict] = mapped_column(JSON)
     checks: Mapped[dict] = mapped_column(JSON)
     score: Mapped[dict] = mapped_column(JSON)
-    created_at: Mapped[int] = mapped_column(Integer)
-    updated_at: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    updated_at: Mapped[int] = mapped_column(BigInteger)
 
 
 class ApplicationEvent(Base):
@@ -80,15 +80,17 @@ class ApplicationEvent(Base):
     actor_id: Mapped[int] = mapped_column(ForeignKey('user.id'))
     action: Mapped[str] = mapped_column(String(32))
     comment: Mapped[str] = mapped_column(String(2000))
-    created_at: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[int] = mapped_column(BigInteger)
 
 
-engine = create_async_engine(config.db.url, connect_args={"timeout": 10})
+engine = create_async_engine(config.db.url, connect_args={"timeout": 10} if config.db.url.startswith("sqlite") else {}, pool_pre_ping=True)
 async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
 
 @event.listens_for(engine.sync_engine, "connect")
 def _set_pragmas(dbapi_conn, _):
+    if engine.dialect.name != "sqlite":
+        return
     cur = dbapi_conn.cursor()
     cur.execute("PRAGMA foreign_keys = ON")
     cur.execute("PRAGMA journal_mode = WAL")
@@ -96,7 +98,8 @@ def _set_pragmas(dbapi_conn, _):
 
 
 async def create_db_and_tables() -> None:
-    await migrate_optional_inn(engine)
+    if engine.dialect.name == "sqlite":
+        await migrate_optional_inn(engine)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

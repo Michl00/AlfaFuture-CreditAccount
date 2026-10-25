@@ -1,0 +1,42 @@
+Alfa Future / Credit conveyor — third-party components and simulated services
+
+This is an educational prototype, not an official Alfa-Bank service.
+
+Code dependencies (exact installed versions: requirements.lock and frontend/package-lock.json):
+- FastAPI: MIT; Starlette: BSD-3-Clause; Pydantic: MIT.
+- SQLAlchemy: MIT; Alembic: MIT; asyncpg: Apache-2.0; aiosqlite: MIT.
+- fastapi-users and fastapi-users-db-sqlalchemy: MIT; pwdlib: MIT.
+- httpx: BSD-3-Clause; Uvicorn: BSD-3-Clause; PyJWT: MIT.
+- pypdf: BSD-3-Clause; python-docx: MIT; openpyxl: MIT; environs: MIT.
+- Astro, TypeScript, Prettier and prettier-plugin-astro: MIT.
+- Playwright browser verification: Apache-2.0.
+- Transitive components and their individual notices remain governed by their package distributions.
+
+Container runtime services:
+- PostgreSQL 17: PostgreSQL License.
+- nginx: BSD-2-Clause.
+- Python and Node base images contain components governed by their bundled notices.
+
+Model and proxy:
+- Qwen/Qwen3-235B-A22B, open weights, Apache-2.0:
+  https://huggingface.co/Qwen/Qwen3-235B-A22B
+- Supported alternatives Qwen3-30B-A3B and Qwen3-8B are configured by exact allowlisted model IDs.
+- CometAPI is a third-party hosted proxy: https://www.cometapi.com/qwen-3-api/
+  Its account terms, quota and charges apply when configured. No key is committed.
+- No weights are bundled or downloaded by the application. The proxy may update serving infrastructure independently.
+- Without the proxy the application explicitly uses deterministic rules, not a claimed LLM response.
+- The legacy prototype retains separate CometAPI settings and is outside the new cabinet's model path.
+
+Simulations, not real integrations:
+- EGRUL/EGRIP, BKI, FNS Transparent Business: deterministic synthetic DataSource adapters.
+- ContractGateway and PaymentGateway: success/failure simulation only; no actual payments, bank contract or signatures.
+- Documentary packages and financial/account/company fixtures: authored synthetic data, not purchased datasets.
+- Rates, policy thresholds, score and cash-flow assumptions: demonstrative rules, not validated bank risk models.
+
+Design and brand assets:
+- Existing Alfa-inspired fonts, graphics and reference screenshots remain documented in
+  frontend/THIRD_PARTY_NOTICES, frontend/docs/asset-sources.json and
+  frontend/docs/official-reference-assets.json.
+- Public references: https://alfabank.ru and https://alfabank.sale .
+  Brand assets are not relicensed by this project; rights for distribution beyond the educational demo
+  must be established separately. No ownership of third-party logos or fonts is claimed.
