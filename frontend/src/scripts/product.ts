@@ -82,12 +82,14 @@ async function api(
   method = "GET",
   data?: unknown,
   headers: Dict = {},
+  signal?: AbortSignal,
 ): Promise<any> {
   let response: Response;
   try {
     response = await fetch("/api/v1" + path, {
       method,
       credentials: "same-origin",
+      signal,
       headers: {
         "Content-Type": "application/json",
         "X-CSRF-Token": csrf,
@@ -96,6 +98,10 @@ async function api(
       ...(data === undefined ? {} : { body: JSON.stringify(data) }),
     });
   } catch {
+    if (signal?.aborted)
+      throw new Error(
+        "Время ожидания ответа помощника истекло. Повторите запрос.",
+      );
     throw new Error(
       "Не удалось связаться с сервером. Проверьте соединение и повторите действие.",
     );
@@ -935,6 +941,7 @@ function chatBubble(text: string, user = false, mode = "") {
   div.append(document.createTextNode(text));
   $("[data-chat]")!.append(div);
   div.scrollIntoView({ block: "nearest" });
+  return div;
 }
 function answerBubble(a: Dict, interactive = true) {
   chatBubble(
@@ -1062,9 +1069,29 @@ function answerBubble(a: Dict, interactive = true) {
     root.append(link);
   }
 }
-async function sendChatMessage(message: string) {
+async function sendChatMessage(message: string, question?: HTMLElement) {
   if (chatPending || !message.trim()) return;
   chatPending = true;
+  question ??= chatBubble(message, true);
+  const pending = chatBubble(
+    "Готовим ответ по вашему вопросу…",
+    false,
+    "Помощник отвечает",
+  );
+  pending.dataset.chatPending = "";
+  const progress = document.createElement("div");
+  progress.className = "review-loading";
+  progress.textContent =
+    "Сопоставляем данные. Ответ может занять до полутора минут.";
+  pending.append(progress);
+  const composer = $<HTMLButtonElement>(
+    '[data-chat-form] button[type="submit"]',
+  )!;
+  const previousDisabled = composer.disabled;
+  const previousText = composer.textContent;
+  composer.disabled = true;
+  composer.textContent = "ИИ отвечает…";
+  $("[data-chat]")!.setAttribute("aria-busy", "true");
   document
     .querySelectorAll<HTMLFormElement>("[data-chat-survey]")
     .forEach((survey) => {
@@ -1079,7 +1106,13 @@ async function sendChatMessage(message: string) {
     const application_id = new URLSearchParams(location.search).get(
       "application",
     );
-    const answer = await api("/chat", "POST", { message, application_id });
+    const answer = await api(
+      "/chat",
+      "POST",
+      { message, application_id },
+      {},
+      AbortSignal.timeout(95000),
+    );
     // A failed request keeps the selected answers and typed message available.
     document
       .querySelectorAll<HTMLFormElement>("[data-chat-survey]")
@@ -1094,10 +1127,39 @@ async function sendChatMessage(message: string) {
         button.disabled = true;
         button.textContent = "Опрос завершён";
       });
-    chatBubble(message, true);
+    pending.remove();
     answerBubble(answer);
+  } catch (err) {
+    pending.remove();
+    const failure = chatBubble(
+      err instanceof Error
+        ? err.message
+        : "Не удалось получить ответ. Повторите запрос.",
+      false,
+      "Ответ не получен",
+    );
+    failure.dataset.chatFailure = "";
+    const retry = document.createElement("button");
+    retry.className = "button button--secondary";
+    retry.type = "button";
+    retry.textContent = "Повторить запрос";
+    retry.onclick = () => {
+      if (chatPending) return;
+      failure.remove();
+      busy(composer, async () => {
+        await sendChatMessage(message, question);
+        const input = $<HTMLTextAreaElement>('[name="message"]')!;
+        if (input.value.trim() === message) input.value = "";
+      });
+    };
+    failure.append(document.createElement("br"), retry);
+    throw err;
   } finally {
+    pending.remove();
     chatPending = false;
+    composer.disabled = previousDisabled;
+    composer.textContent = previousText;
+    $("[data-chat]")!.removeAttribute("aria-busy");
     document
       .querySelectorAll<HTMLFormElement>("[data-chat-survey]")
       .forEach((survey) => {
@@ -1167,6 +1229,15 @@ async function chat() {
         form.requestSubmit();
       }),
   );
+  if (application && !history.length) {
+    try {
+      await sendChatMessage(
+        "Объясни результат этой заявки: причины текущего статуса, финансовую нагрузку и что делать дальше.",
+      );
+    } catch {
+      // The chat shows the failure and an explicit retry next to the question.
+    }
+  }
 }
 async function company() {
   const items = (await api("/applications")).items as Dict[];

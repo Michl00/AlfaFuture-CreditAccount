@@ -92,21 +92,39 @@ const base=process.env.E2E_BASE_URL||'http://127.0.0.1:8000';
  await page.locator('[data-submit-application]').click();
  await page.waitForURL('**/cabinet/application/**');
  assert.equal(new URL(page.url()).searchParams.get('id'),id);
+ let explanationRequest;
+ let explanationCalls=0,releaseExplanation;
+ const explanationGate=new Promise(resolve=>{releaseExplanation=resolve});
+ await page.route('**/api/v1/chat',async route=>{
+  if(route.request().method()!=='POST')return route.continue();
+  explanationRequest=route.request().postDataJSON();
+  explanationCalls++;
+  if(explanationCalls===1){
+   await explanationGate;
+   return route.fulfill({status:502,json:{detail:'Тестовый сбой сервиса помощника'}});
+  }
+  await route.continue();
+ });
  await page.getByRole('link',{name:'Объяснить результат с ИИ ↗'}).click();
  await page.getByRole('heading',{name:'Разберём результат заявки',exact:true}).waitFor();
  await page.getByText('Заключение по заявке',{exact:true}).waitFor();
  assert.equal(new URL(page.url()).searchParams.get('application'),id);
- let explanationRequest;
- await page.route('**/api/v1/chat',async route=>{
-  if(route.request().method()!=='POST')return route.continue();
-  explanationRequest=route.request().postDataJSON();
-  await route.continue();
- });
- await page.getByRole('button',{name:'Почему такой результат?',exact:true}).click();
+ await page.locator('[data-chat-pending]').waitFor();
+ assert.equal(await page.locator('[data-chat] .user').count(),1);
+ assert(await page.locator('[data-chat-form] button').isDisabled());
+ releaseExplanation();
+ await page.getByRole('button',{name:'Повторить запрос',exact:true}).click();
  await page.getByText('Помощник по правилам · LLM недоступна',{exact:true}).waitFor();
  assert.equal(explanationRequest.application_id,id);
+ assert.equal(explanationCalls,2);
+ assert.equal(await page.locator('[data-chat] .user').count(),1);
+ assert.equal(await page.locator('[data-chat-pending]').count(),0);
+ assert(await page.locator('[data-chat-form] button').isEnabled());
  assert.equal(await page.locator('[data-use-proposal]').count(),0);
  assert.equal(await page.locator('[data-chat-survey]').count(),0);
+ await page.reload();
+ await page.getByText('Помощник по правилам · LLM недоступна',{exact:true}).waitFor();
+ assert.equal(explanationCalls,2,'Reload must restore the conversation without sending again');
  await page.locator('[data-logout]').click();
  await page.locator('[data-login-as="bank"]').click();
  await page.locator('[data-table] table').waitFor();
