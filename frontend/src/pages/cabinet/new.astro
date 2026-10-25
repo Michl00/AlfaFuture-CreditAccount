@@ -3,16 +3,22 @@ import Layout from "../../layouts/ProductLayout.astro";
 ---
 
 <Layout title="Новая заявка" screen="new">
-  <a class="credit-back" href="/cabinet/">
+  <a class="credit-back" href="/cabinet/" data-application-back>
     ← К продуктам
   </a>
   <div class="product-heading">
     <div>
       <p class="product-eyebrow">ФИНАНСИРОВАНИЕ БИЗНЕСА</p>
-      <h1>Новая заявка</h1>
-      <p>Проверьте условия и устойчивость бизнеса до отправки</p>
+      <h1 data-application-title>Новая заявка</h1>
+      <p data-application-description>
+        Проверьте условия и устойчивость бизнеса до отправки
+      </p>
     </div>
-    <a class="button button--secondary" href="/cabinet/assistant/">
+    <a
+      class="button button--secondary"
+      href="/cabinet/assistant/"
+      data-application-assistant
+    >
       Помочь с выбором ↗
     </a>
   </div>

@@ -382,10 +382,29 @@ async function newApplication() {
     )
     .join("");
   $("[data-summary-company]")!.textContent = account.name;
-  let saved = await api("/draft");
   const params = new URLSearchParams(location.search);
   const edit = params.get("edit");
+  let saved: Dict | null = null;
   let resumeAssessment: Dict | null = null;
+  if (edit) {
+    editApplication = await api("/applications/" + encodeURIComponent(edit));
+    if (editApplication!.status !== "needs_info")
+      throw new Error("Уточнение доступно по запросу сотрудника.");
+    saved = editApplication!.data;
+    document.title = "Уточнение заявки · Альфа Future";
+    $("[data-application-title]")!.textContent = "Уточнение заявки";
+    $("[data-application-description]")!.textContent =
+      `Редактируете заявку ${edit} · версия ${editApplication!.version}. После отправки сохранятся её номер и история.`;
+    const back = $<HTMLAnchorElement>("[data-application-back]")!;
+    back.href = "/cabinet/application/?id=" + encodeURIComponent(edit);
+    back.textContent = "← К заявке";
+    const assistant = $<HTMLAnchorElement>("[data-application-assistant]")!;
+    assistant.href =
+      "/cabinet/assistant/?application=" + encodeURIComponent(edit);
+    assistant.textContent = "Объяснить результат ↗";
+  } else if (!params.get("assessment")) {
+    saved = await api("/draft");
+  }
   if (params.get("assessment")) {
     resumeAssessment = await api(
       "/assessments/" +
@@ -393,12 +412,6 @@ async function newApplication() {
         "?include_result=true",
     );
     saved = resumeAssessment!.data;
-  }
-  if (edit) {
-    editApplication = await api("/applications/" + encodeURIComponent(edit));
-    if (editApplication!.status !== "needs_info")
-      throw new Error("Уточнение доступно по запросу сотрудника.");
-    saved = editApplication!.data;
   }
   if (saved) {
     for (const [key, value] of Object.entries(saved)) {
@@ -416,6 +429,7 @@ async function newApplication() {
   const selected = params.get("product");
   if (
     !resumeAssessment &&
+    !edit &&
     selected &&
     products.some((p) => p.id === selected)
   ) {
@@ -522,11 +536,17 @@ async function newApplication() {
   $("[data-save]")!.onclick = (e) =>
     busy(e.currentTarget as HTMLButtonElement, async () => {
       if (!validateStep()) return;
+      if (editApplication) {
+        throw new Error(
+          "Чтобы отправить изменения этой заявки, выполните расчёт и подтвердите уточнение.",
+        );
+      }
       await api("/draft", "PUT", readForm());
       toast("Черновик сохранён на сервере");
     });
   attachment();
   scenario();
+  if (editApplication) $("[data-save]")!.hidden = true;
   form.onsubmit = (e) => {
     e.preventDefault();
     if (step < 3) {
@@ -537,7 +557,7 @@ async function newApplication() {
     busy($<HTMLButtonElement>("[data-calculate]")!, async () => {
       const run = ++generation;
       const data = readForm();
-      await api("/draft", "PUT", data);
+      if (!editApplication) await api("/draft", "PUT", data);
       const assessment = resumeAssessment
         ? {
             ...resumeAssessment.result,
@@ -920,9 +940,11 @@ function answerBubble(a: Dict, interactive = true) {
   chatBubble(
     a.text,
     false,
-    a.mode === "llm"
-      ? `${a.model} · открытые веса`
-      : "Помощник по правилам · LLM недоступна",
+    a.mode === "facts"
+      ? "Сохранённый расчёт заявки"
+      : a.mode === "llm"
+        ? `${a.model} · открытые веса`
+        : "Помощник по правилам · LLM недоступна",
   );
   const root = $("[data-chat]")!;
   const questions = (a.questions || []).filter(
@@ -1013,6 +1035,7 @@ function answerBubble(a: Dict, interactive = true) {
     if (!interactive) survey.dataset.completed = "true";
     root.append(survey);
   }
+  if (new URLSearchParams(location.search).has("application")) return;
   if (a.proposal?.product && (a.turn_id || a.id)) {
     const proposal = a.proposal;
     const card = document.createElement("div");
@@ -1091,8 +1114,30 @@ async function sendChatMessage(message: string) {
   }
 }
 async function chat() {
-  const history = await api("/chat");
-  if (!history.length)
+  const application = new URLSearchParams(location.search).get("application");
+  if (application) {
+    const row = await api("/applications/" + encodeURIComponent(application));
+    document.title = "Объяснение результата заявки · Альфа Future";
+    $(".product-heading h1")!.textContent = "Разберём результат заявки";
+    $(".product-eyebrow")!.textContent = "ОБЪЯСНЕНИЕ ГОТОВОГО РЕЗУЛЬТАТА";
+    $(".product-heading p:last-child")!.textContent =
+      `${product(row.data.product).name} · ${rub(row.data.amount)} · ${labels[row.status] || row.status} · версия ${row.version}`;
+    $<HTMLTextAreaElement>('[name="message"]')!.placeholder =
+      "Почему получен такой результат? Что повлияло на решение?";
+    const sidebar = $(".assistant-layout aside .product-card")!;
+    sidebar.innerHTML = `<h3>О текущей заявке</h3><p>Помощник объясняет сохранённый расчёт, причины решения и следующие действия.</p><a class="credit-text-link" href="/cabinet/application/?id=${esc(application)}">← К заявке</a><div class="chat-suggestions"><button data-prompt="Объясни причины текущего статуса этой заявки.">Почему такой результат?</button><button data-prompt="Объясни платёж и долговую нагрузку по этой заявке.">Из чего складывается нагрузка?</button><button data-prompt="Что делать дальше по этой заявке?">Что делать дальше?</button></div>`;
+    const explanation = await api(
+      "/applications/" + encodeURIComponent(application) + "/explanation",
+      "POST",
+      {},
+    );
+    chatBubble(explanation.text, false, "Заключение по заявке");
+  }
+  const history = await api(
+    "/chat" +
+      (application ? "?application_id=" + encodeURIComponent(application) : ""),
+  );
+  if (!application && !history.length)
     chatBubble(
       "Расскажите о задаче бизнеса: что хотите профинансировать и откуда планируете возвращать средства? Если пока не знаете, начнём с короткого опроса.",
     );

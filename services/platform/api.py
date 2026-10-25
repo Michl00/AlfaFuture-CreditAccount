@@ -739,12 +739,15 @@ class Chat(Strict):
 
 
 @router.get("/chat")
-async def history(account: Identity, db: DB):
+async def history(account: Identity, db: DB, application_id: str | None = None):
+    if application_id:
+        await owned(application_id, account, db)
     rows = (
         await db.scalars(
             select(ChatTurn)
             .where(
                 ChatTurn.account_id == account.id,
+                ChatTurn.answer["application_id"].as_string() == application_id,
                 ~ChatTurn.question.like("Заключение по заявке %"),
             )
             .order_by(ChatTurn.created_at.desc())
@@ -758,11 +761,13 @@ async def history(account: Identity, db: DB):
 
 @router.post("/chat")
 async def chat(data: Chat, account: Identity, db: DB):
+    row = await owned(data.application_id, account, db) if data.application_id else None
     rows = (
         await db.scalars(
             select(ChatTurn)
             .where(
                 ChatTurn.account_id == account.id,
+                ChatTurn.answer["application_id"].as_string() == data.application_id,
                 ~ChatTurn.question.like("Заключение по заявке %"),
             )
             .order_by(ChatTurn.created_at.desc())
@@ -779,18 +784,22 @@ async def chat(data: Chat, account: Identity, db: DB):
         )
     messages.append({"role": "user", "content": data.message})
     context = {"catalog": catalog()}
-    if data.application_id:
-        row = await owned(data.application_id, account, db)
+    if row:
+        context["task"] = "application_explanation"
+        context["application_id"] = row.id
         context["assessment"] = {
             k: row.assessment[k]
             for k in ("status", "risk", "terms", "rules", "portfolio")
         }
-    if data.application_id:
+        context["assessment"]["status"] = row.status
         context["assessment"]["facts"] = fact_catalog(row.payload, row.assessment)
     # Release the database transaction while the remote model generates.
     account_id = account.id
     await db.commit()
     answer = await assistant(messages, context)
+    if data.application_id:
+        answer = {k: v for k, v in answer.items() if k not in ("product", "proposal")}
+        answer["application_id"] = data.application_id
     turn = ChatTurn(
         id=str(uuid4()),
         account_id=account_id,

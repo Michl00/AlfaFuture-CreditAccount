@@ -197,6 +197,12 @@ class CometAssistant(AssistantProvider):
                 "только идентификаторы из allowed_references). Сопоставь источники и прогнозы. "
                 "Не переопределяй обязательные запреты. Вопросы questions здесь не нужны."
             )
+        elif context.get("task") == "application_explanation":
+            prompt += (
+                " Объясняй сохранённый результат указанной заявки и её текущий статус. "
+                "Отвечай на вопрос, опираясь на assessment и facts. Не начинай подбор нового кредита, "
+                "не предлагай создать новую заявку, не добавляй product или proposal."
+            )
         else:
             prompt += (
                 " Когда цель ясна, добавь proposal: объект product (точный id), goal, "
@@ -307,6 +313,8 @@ class CometAssistant(AssistantProvider):
 
 class RulesAssistant(AssistantProvider):
     async def answer(self, messages, context):
+        if context.get("task") == "application_explanation":
+            context = context["assessment"]
         if context.get("task") == "underwriting":
             context = {
                 **context,
@@ -329,7 +337,11 @@ class RulesAssistant(AssistantProvider):
                 "text": labels.get(context["status"], context["status"])
                 + ". "
                 + reasons
-                + ". Основания и расчёт доступны ниже. ИИ через прокси сейчас недоступен.",
+                + ". "
+                + "\n".join(context.get("facts", {}).get(key, "") for key in (
+                    "TERMS", "PORTFOLIO", "BASE_FORECAST", "STRESS_FORECAST"
+                ))
+                + "\nИИ через прокси сейчас недоступен.",
                 "questions": [],
                 "mode": "rules",
                 "model": None,

@@ -1073,10 +1073,11 @@
   content: "";
   width: 17px;
   height: 17px;
+  flex: 0 0 17px;
   border: 2px solid #e0e3e9;
   border-top-color: #ef3124;
   border-radius: 50%;
-  animation: review-spin 1s linear infinite;
+  animation: review-spin 1s linear infinite !important;
 }
 .application-next-step {
   display: flex;
@@ -1190,7 +1191,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .review-loading:before {
-    animation: none;
+    animation-duration: 2s !important;
   }
 }
 @media (max-width: 760px) {

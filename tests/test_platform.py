@@ -288,6 +288,35 @@ class ProductTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(revisions[0]["snapshot"]["data"]["documents_attached"])
         self.assertTrue(revisions[1]["snapshot"]["data"]["documents_attached"])
 
+    async def test_application_chat_uses_result_and_separate_history(self):
+        await self.login()
+        row, _ = await self.submit({**DATA, "scenario": "overdue"})
+        with patch(
+            "services.platform.adapters.CometAssistant.answer",
+            new_callable=AsyncMock,
+            side_effect=httpx.ConnectError("offline"),
+        ) as provider:
+            response = await self.client.post("/api/v1/chat", json={
+                "message": "Почему такой результат?",
+                "application_id": row["id"],
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        answer = response.json()
+        self.assertIn("Нужно рассмотрение сотрудником", answer["text"])
+        self.assertIn("Новый платёж", answer["text"])
+        self.assertEqual(answer["questions"], [])
+        self.assertNotIn("proposal", answer)
+        self.assertNotIn("product", answer)
+        context = provider.call_args.args[1]
+        self.assertEqual(context["task"], "application_explanation")
+        self.assertEqual(context["assessment"]["status"], row["status"])
+        self.assertEqual((await self.client.get("/api/v1/chat")).json(), [])
+        history = await self.client.get("/api/v1/chat", params={"application_id": row["id"]})
+        self.assertEqual(len(history.json()), 1)
+        await self.login("ip")
+        forbidden = await self.client.get("/api/v1/chat", params={"application_id": row["id"]})
+        self.assertEqual(forbidden.status_code, 404)
+
     async def test_chat_provider_failure_is_explicit_and_persisted(self):
         await self.login()
         with patch(
