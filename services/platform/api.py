@@ -789,10 +789,20 @@ async def chat(data: Chat, account: Identity, db: DB):
         context["application_id"] = row.id
         context["assessment"] = {
             k: row.assessment[k]
-            for k in ("status", "risk", "terms", "rules", "portfolio")
+            for k in ("status", "risk", "terms", "rules", "portfolio", "plan", "base", "stress")
         }
         context["assessment"]["status"] = row.status
         context["assessment"]["facts"] = fact_catalog(row.payload, row.assessment)
+        bureau = next((c.get("data", {}) for c in row.assessment["checks"] if c.get("key") == "bureau"), {})
+        context["assessment"]["external_payment"] = max(row.payload["debt"], bureau.get("monthly_debt", 0))
+        if row.status == "offer_pending" and row.assessment.get("offer"):
+            offer = row.assessment["offer"]
+            context["assessment"]["offer"] = {
+                "amount": offer["data"]["amount"], "months": offer["data"]["months"],
+                "rate": offer["assessment"]["terms"]["rate"],
+                "payment": offer["assessment"]["plan"]["payment"],
+                "expired": offer["expires"] < time.time(),
+            }
     # Release the database transaction while the remote model generates.
     account_id = account.id
     await db.commit()

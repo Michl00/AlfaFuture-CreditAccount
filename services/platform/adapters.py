@@ -160,6 +160,12 @@ class AssistantProvider(ABC):
     async def answer(self, messages: list[dict], context: dict) -> dict: ...
 
 
+class AssistantUnavailable(ValueError):
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 class CometAssistant(AssistantProvider):
     """Server-only proxy transport. No model downloads and no client-side key."""
 
@@ -172,9 +178,9 @@ class CometAssistant(AssistantProvider):
         key = load_config().comet.api_key
         model = os.getenv("ASSISTANT_MODEL", "qwen3-235b-a22b")
         if not key:
-            raise ValueError("Proxy is not configured")
+            raise AssistantUnavailable("missing_key")
         if model not in ("qwen3-235b-a22b", "qwen3-30b-a3b", "qwen3-8b"):
-            raise ValueError("Configure a supported open-weight Qwen3 model")
+            raise AssistantUnavailable("unsupported_model")
         prompt = (
             "Ты консультант учебного кредитного кабинета малого бизнеса. Пиши по-русски, конкретно и кратко. "
             "Все данные синтетические. Не обещай одобрение, не меняй ставки, числа, статус и расчёты из контекста. "
@@ -314,7 +320,7 @@ class CometAssistant(AssistantProvider):
 class RulesAssistant(AssistantProvider):
     async def answer(self, messages, context):
         if context.get("task") == "application_explanation":
-            context = context["assessment"]
+            return explain_application(context["assessment"])
         if context.get("task") == "underwriting":
             context = {
                 **context,
@@ -395,7 +401,94 @@ async def assistant(messages, context):
         AttributeError,
         IndexError,
     ) as error:
+        reason = assistant_failure_reason(error)
         logging.getLogger(__name__).warning(
-            "Assistant unavailable category=%s", type(error).__name__
+            "Assistant unavailable reason=%s category=%s", reason, type(error).__name__
         )
-        return await RulesAssistant().answer(messages, context)
+        answer = await RulesAssistant().answer(messages, context)
+        return {**answer, "unavailable_reason": reason,
+                "availability_message": ASSISTANT_FAILURE_MESSAGES[reason]}
+
+
+ASSISTANT_FAILURE_MESSAGES = {
+    "missing_key": "Подключение к ИИ не настроено. Показано объяснение по данным заявки.",
+    "unsupported_model": "Выбранная модель ИИ не поддерживается. Показано объяснение по данным заявки.",
+    "authentication": "Сервис ИИ отклонил ключ доступа. Нужно проверить подключение.",
+    "quota": "Сервис ИИ сообщил об ограничении баланса или квоты.",
+    "rate_limit": "Слишком много запросов к ИИ. Повторите вопрос немного позже.",
+    "timeout": "ИИ не успел ответить. Можно повторить вопрос.",
+    "connection": "Не удалось подключиться к сервису ИИ. Можно повторить вопрос.",
+    "provider": "Сервис ИИ временно не отвечает. Можно повторить вопрос.",
+    "invalid_response": "Сервис ИИ вернул ответ, который не удалось прочитать. Можно повторить вопрос.",
+}
+
+
+def assistant_failure_reason(error):
+    if isinstance(error, AssistantUnavailable):
+        return error.reason
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        return "timeout"
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status in (401, 403):
+            return "authentication"
+        if status == 402:
+            return "quota"
+        if status == 429:
+            return "rate_limit"
+        return "provider"
+    if isinstance(error, httpx.RequestError):
+        return "connection"
+    return "invalid_response"
+
+
+def explain_application(result):
+    def money(value):
+        return f"{value:,.2f}".replace(",", " ").replace(".", ",") + " ₽"
+
+    statuses = {
+        "approved": ("Заявка одобрена", "Откройте карточку заявки, чтобы проверить условия и этап оформления."),
+        "in_review": ("Нужно рассмотрение сотрудником", "Дождитесь решения сотрудника. Если он запросит уточнения, дополните эту заявку."),
+        "rejected": ("По заявке получен отказ", "Проверьте причины решения в карточке заявки. Если данные неверны, обратитесь к сотруднику."),
+        "needs_info": ("Нужны дополнительные сведения", "Нажмите «Ответить на запрос» в карточке заявки, исправьте данные и отправьте уточнение."),
+        "technical_hold": ("Проверки ещё не завершены", "Дождитесь восстановления источника данных и повторной проверки сотрудником."),
+        "offer_pending": ("Банк предложил новые условия", "Сравните предложение с исходными условиями. В карточке заявки можно согласиться с предложением или отклонить его."),
+        "offer_declined": ("Предложение банка отклонено", "Обратитесь к сотруднику, если хотите обсудить другие условия."),
+        "funded": ("Учебная выдача выполнена", "Условия и история учебной выплаты доступны в карточке заявки."),
+        "settled": ("Обязательство погашено", "Заявка завершена. История и расчёт остаются в её карточке."),
+    }
+    title, next_step = statuses.get(result["status"], ("Результат рассмотрения", "Откройте карточку заявки, чтобы проверить её статус."))
+    reasons = "; ".join(rule["text"] for rule in result.get("rules", []))
+    sections = [{"title": title, "text": reasons or "Блокирующие факторы по сохранённым проверкам не найдены."}]
+    offer = result.get("offer")
+    if offer:
+        sections.append({"title": "Предложение банка", "text":
+            f"Сумма {money(offer['amount'])} · срок {offer['months']} мес. · ставка {offer['rate']}%. "
+            f"Максимальный платёж — {money(offer['payment'])} в месяц. "
+            + ("Срок предложения истёк. Попросите сотрудника обновить условия." if offer["expired"] else "Новые условия начнут действовать только после вашего согласия.")})
+        if offer["expired"]:
+            next_step = "Попросите сотрудника обновить предложение: срок согласия с этими условиями истёк."
+    facts = result.get("facts", {})
+    terms = result.get("terms", {})
+    plan = result.get("plan", {})
+    if plan:
+        sections.append({"title": "Исходные условия" if offer else "Условия и платёж", "text":
+            f"Новый платёж — максимум {money(plan['payment'])} в месяц. "
+            f"Ставка {terms['rate']}% · срок {terms['months']} мес."})
+    elif facts.get("TERMS"):
+        sections.append({"title": "Условия и платёж", "text": facts["TERMS"]})
+    portfolio = result.get("portfolio", {})
+    if "external_payment" in result:
+        sections.append({"title": "Другие обязательства", "text":
+            f"Внешние платежи — {money(result['external_payment'])} в месяц. "
+            f"По ранее одобренным заявкам — {money(portfolio.get('payment', 0))} в месяц. "
+            "Эти суммы учитываются дополнительно к новому платежу."})
+    if result.get("base") and result.get("stress"):
+        base, stress = result["base"], result["stress"]
+        forecast = f"Минимальный остаток денег: {money(base['minimum'])} в базовом сценарии и {money(stress['minimum'])} в стресс-сценарии. "
+        forecast += (f"В базовом сценарии нехватка денег ожидается в месяце {base['deficit_month']}. " if base['deficit_month'] else "В базовом сценарии нехватка денег не прогнозируется. ")
+        forecast += (f"В стресс-сценарии нехватка денег ожидается в месяце {stress['deficit_month']}." if stress['deficit_month'] else "В стресс-сценарии нехватка денег не прогнозируется.")
+        sections.append({"title": "Прогноз денег", "text": forecast})
+    sections.append({"title": "Что делать дальше", "text": next_step})
+    return {"text": "\n\n".join(s["title"] + "\n" + s["text"] for s in sections),
+            "sections": sections, "questions": [], "mode": "rules", "model": None}

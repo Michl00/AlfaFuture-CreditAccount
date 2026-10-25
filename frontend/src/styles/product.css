@@ -692,6 +692,27 @@
   margin-bottom: 8px;
   white-space: normal;
 }
+.chat-answer-sections {
+  display: grid;
+  gap: 18px;
+  white-space: normal;
+}
+.chat-answer-sections h3 {
+  font-size: 14px;
+  margin: 0 0 6px;
+}
+.credit-app .chat-answer-sections p {
+  margin: 0;
+  color: #444a55;
+}
+.credit-app .chat-bubble .chat-availability {
+  white-space: normal;
+  margin: 18px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #d9dce4;
+  color: #74767e;
+  font-size: 12px;
+}
 .chat-panel form {
   display: flex;
   align-items: end;

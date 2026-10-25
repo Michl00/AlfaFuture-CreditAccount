@@ -944,15 +944,37 @@ function chatBubble(text: string, user = false, mode = "") {
   return div;
 }
 function answerBubble(a: Dict, interactive = true) {
-  chatBubble(
-    a.text,
+  const structured = Array.isArray(a.sections) && a.sections.length > 0;
+  const bubble = chatBubble(
+    structured ? "" : a.text,
     false,
     a.mode === "facts"
       ? "Сохранённый расчёт заявки"
       : a.mode === "llm"
         ? `${a.model} · открытые веса`
-        : "Помощник по правилам · LLM недоступна",
+        : "Объяснение по расчёту",
   );
+  bubble.dataset.chatMode = a.mode;
+  if (structured) {
+    const content = document.createElement("div");
+    content.className = "chat-answer-sections";
+    for (const section of a.sections) {
+      const item = document.createElement("section");
+      const title = document.createElement("h3");
+      title.textContent = section.title;
+      const text = document.createElement("p");
+      text.textContent = section.text;
+      item.append(title, text);
+      content.append(item);
+    }
+    bubble.append(content);
+  }
+  if (a.availability_message) {
+    const notice = document.createElement("p");
+    notice.className = "chat-availability";
+    notice.textContent = a.availability_message;
+    bubble.append(notice);
+  }
   const root = $("[data-chat]")!;
   const questions = (a.questions || []).filter(
     (q: Dict) => q.text && q.options?.length,

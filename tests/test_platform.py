@@ -317,6 +317,29 @@ class ProductTests(unittest.IsolatedAsyncioTestCase):
         forbidden = await self.client.get("/api/v1/chat", params={"application_id": row["id"]})
         self.assertEqual(forbidden.status_code, 404)
 
+    async def test_offer_explanation_separates_proposal_and_original_terms(self):
+        await self.login()
+        row, _ = await self.submit({**DATA, "scenario": "overdue"})
+        await self.login("bank")
+        offered = await self.action(row, "offer", amount=1000000, months=36)
+        self.assertEqual(offered.status_code, 200, offered.text)
+        await self.login()
+        with patch("services.platform.adapters.CometAssistant.answer", new_callable=AsyncMock,
+                   side_effect=httpx.ConnectError("offline")):
+            response = await self.client.post("/api/v1/chat", json={
+                "message": "Объясни новые условия", "application_id": row["id"],
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        answer = response.json()
+        self.assertNotIn("offer_pending", answer["text"])
+        self.assertIn("Банк предложил новые условия", answer["text"])
+        sections = {section["title"]: section["text"] for section in answer["sections"]}
+        self.assertIn("1 000 000,00 ₽", sections["Предложение банка"])
+        self.assertIn("36 мес.", sections["Предложение банка"])
+        self.assertIn("24 мес.", sections["Исходные условия"])
+        self.assertIn("согласиться", sections["Что делать дальше"])
+        self.assertEqual(answer["unavailable_reason"], "connection")
+
     async def test_chat_provider_failure_is_explicit_and_persisted(self):
         await self.login()
         with patch(
