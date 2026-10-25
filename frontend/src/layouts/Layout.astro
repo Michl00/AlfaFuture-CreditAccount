@@ -1,0 +1,56 @@
+---
+import "../styles/global.css";
+import Header from "../components/sections/Header.astro";
+import Footer from "../components/sections/Footer.astro";
+import Modal from "../components/ui/Modal.astro";
+interface Props {
+  title: string;
+  active?: string;
+}
+const { title, active = "home" } = Astro.props;
+---
+
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Учебная библиотека Astro-компонентов в стиле Альфа-Банка: демо сайта, UI Kit и кредитный кабинет."
+    />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="theme-color" content="#111111" />
+    <link rel="icon" href="/favicon.svg" />
+    <link
+      rel="preload"
+      href="/assets/alfa-regular.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <title>{title} · Alfa Future</title>
+  </head>
+  <body id="top">
+    <a class="skip-link" href="#main">
+      Перейти к содержимому
+    </a>
+    <Header active={active} />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+    <Modal id="product-modal" title="Демонстрация продукта">
+      <p data-modal-description>
+        Это пример интерфейса. Условия используются только для демонстрации.
+      </p>
+      <a class="button button--primary" href="/cabinet/">
+        Перейти в демо кабинета →
+      </a>
+    </Modal>
+    <div class="toast" role="status" aria-live="polite" hidden></div>
+    <script>
+      import "../scripts/ui";
+    </script>
+  </body>
+</html>

@@ -1,0 +1,53 @@
+---
+import { Button, Icon } from "../ui";
+const { active = "home" } = Astro.props;
+---
+
+<header class="site-header">
+  <div class="container header-top">
+    <a class="brand" href="/" aria-label="Альфа — главная">
+      <span class="alfa-mark">А</span>
+      <span class="brand-name">
+        Альфа-Банк<span>учебный прототип</span>
+      </span>
+    </a>
+    <nav class="audience-nav" aria-label="Аудитория">
+      <a href="/" class:list={[{ active: active === "home" }]}>
+        Частным лицам
+      </a>
+      <a href="/cabinet/" class:list={[{ active: active === "cabinet" }]}>
+        Малому бизнесу и ИП
+      </a>
+    </nav>
+    <div class="header-actions">
+      <a class="kit-link" href="/components/">
+        <Icon name="grid" size={16} /> UI Kit
+      </a>
+      <Button href="/cabinet/" variant="secondary" size="sm">
+        <Icon name="user" size={16} /> Личный кабинет
+      </Button>
+      <button
+        class="icon-button mobile-menu"
+        aria-expanded="false"
+        aria-controls="main-nav"
+        aria-label="Открыть меню"
+        data-menu
+      >
+        <Icon name="menu" />
+      </button>
+    </div>
+  </div>
+  <div class="container">
+    <nav id="main-nav" class="product-nav" aria-label="Продукты">
+      <a href="/#products">Карты</a>
+      <a href="/#calculator">Кредиты</a>
+      <a href="/#products">Вклады и счета</a>
+      <a href="/#services">Инвестиции</a>
+      <a href="/#services">Сервисы</a>
+      <a href="/#faq">Помощь</a>
+      <a class="nav-end" href="/components/">
+        Библиотека компонентов <span>↗</span>
+      </a>
+    </nav>
+  </div>
+</header>

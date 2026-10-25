@@ -157,3 +157,7 @@ python -m unittest discover -s tests -v
 npm install --prefix work/demo-js jsdom
 NODE_PATH=./work/demo-js/node_modules node tests/test_demo_ui.cjs
 ```
+
+## Astro UI и дизайн-демо
+
+Новый независимый frontend находится в [frontend/](frontend/README.md). Он содержит демо главной, каталог Astro-компонентов и локальный кредитный кабинет. Запуск: `cd frontend && npm ci && npm run dev`. Существующий FastAPI-интерфейс не изменён; подключение нового frontend к API — следующий этап.

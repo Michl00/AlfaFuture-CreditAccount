@@ -1,0 +1,37 @@
+---
+interface Props {
+  items: { label: string; value: string }[];
+  active?: string;
+  label?: string;
+}
+const { items, active = items[0]?.value, label = "Разделы" } = Astro.props;
+---
+
+<div class="tabs-widget" data-tabs>
+  <div class="tabs" role="tablist" aria-label={label}>
+    {items.map((x) => (
+      <button
+        type="button"
+        role="tab"
+        id={`tab-${x.value}`}
+        aria-controls={`panel-${x.value}`}
+        aria-selected={x.value === active ? "true" : "false"}
+        tabindex={x.value === active ? 0 : -1}
+        data-tab={x.value}
+      >
+        {x.label}
+      </button>
+    ))}
+  </div>
+  {items.map((x) => (
+    <div
+      role="tabpanel"
+      id={`panel-${x.value}`}
+      aria-labelledby={`tab-${x.value}`}
+      hidden={x.value !== active}
+      tabindex="0"
+    >
+      <slot name={x.value} />
+    </div>
+  ))}
+</div>

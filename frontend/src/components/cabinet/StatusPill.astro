@@ -1,0 +1,12 @@
+---
+import { statusLabels, type RequestStatus } from "../../data/cabinet";
+interface Props {
+  status: RequestStatus;
+}
+const { status } = Astro.props;
+---
+
+<span class:list={["status-pill", `status-${status}`]}>
+  <i></i>
+  {statusLabels[status]}
+</span>

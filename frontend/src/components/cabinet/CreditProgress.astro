@@ -1,0 +1,18 @@
+---
+const { steps = ["Ваша задача", "Предложения", "О компании", "Проверка"] } =
+  Astro.props;
+---
+
+<aside class="credit-progress">
+  <ol class="credit-wizard-steps" aria-label="Этапы оформления">
+    {steps.map((step: string, i: number) => (
+      <li
+        class:list={[{ "is-current": i === 0 }]}
+        aria-current={i === 0 ? "step" : undefined}
+      >
+        <span>{i + 1}</span>
+        <strong>{step}</strong>
+      </li>
+    ))}
+  </ol>
+</aside>

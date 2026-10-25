@@ -1,0 +1,17 @@
+---
+interface Props {
+  label: string;
+  name: string;
+  options: string[];
+}
+const { label, name, options } = Astro.props;
+---
+
+<label class="field">
+  <span>{label}</span>
+  <select name={name}>
+    {options.map((x) => (
+      <option>{x}</option>
+    ))}
+  </select>
+</label>

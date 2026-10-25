@@ -1,0 +1,350 @@
+---
+import Layout from "../layouts/Layout.astro";
+import * as UI from "../components/ui";
+import Calculator from "../components/sections/Calculator.astro";
+import { applications, faq, products } from "../data/products";
+const sections = [
+  ["foundation", "Основы"],
+  ["buttons", "Кнопки и иконки"],
+  ["fields", "Поля и выбор"],
+  ["feedback", "Обратная связь"],
+  ["navigation", "Навигация"],
+  ["cards", "Карточки и промо"],
+  ["data", "Данные и состояния"],
+  ["composition", "Готовые блоки"],
+];
+---
+
+<Layout title="Библиотека компонентов" active="components">
+  <div class="container kit-layout">
+    <aside class="kit-sidebar">
+      <a href="/components/" class="kit-title">
+        <UI.Icon name="grid" /> Alfa Future UI
+      </a>
+      <span class="muted small">Astro · v0.1.0</span>
+      <nav aria-label="Разделы библиотеки">
+        {sections.map(([id, title], i) => (
+          <a href={`#${id}`}>
+            <span>0{i + 1}</span>
+            {title}
+          </a>
+        ))}
+      </nav>
+      <a href="/" class="back-link">
+        ← Демо сайта
+      </a>
+      <div class="sidebar-note">
+        Независимые компоненты.
+        <br />
+        Типизированные свойства.
+        <br />
+        Один визуальный язык.
+      </div>
+    </aside>
+    <div class="kit-main">
+      <div class="kit-intro">
+        <UI.Badge tone="success">БИБЛИОТЕКА КОМПОНЕНТОВ</UI.Badge>
+        <h1>
+          Дизайн, из которого
+          <br />
+          складывается продукт<span>.</span>
+        </h1>
+        <p>
+          Визуальный язык Альфа-Банка, собранный в переиспользуемые
+          Astro-компоненты. От кнопки до кредитного кабинета.
+        </p>
+        <div class="row">
+          <UI.Button href="/">Смотреть демо сайта ↗</UI.Button>
+          <UI.Button href="/cabinet/" variant="secondary">
+            Кредитный кабинет
+          </UI.Button>
+          <UI.Button href="/cabinet/components/" variant="secondary">
+            Компоненты кабинета ↗
+          </UI.Button>
+        </div>
+      </div>
+      <section id="foundation" class="kit-section">
+        <div class="kit-section-title">
+          <span>01</span>
+          <h2>Основы</h2>
+          <UI.Badge>Design tokens</UI.Badge>
+        </div>
+        <p class="muted">
+          Цвет, типографика, радиусы и отступы — в общих CSS-переменных.
+        </p>
+        <div class="swatches">
+          {[
+            ["Альфа-красный", "#ef3124"],
+            ["Графит", "#111111"],
+            ["Лаванда", "#dfbfff"],
+            ["Голубой", "#61cce4"],
+            ["Светлый", "#e9edf0"],
+            ["Зелёный", "#b6e9ce"],
+          ].map(([name, color]) => (
+            <div>
+              <div style={`background:${color}`}></div>
+              <strong>{name}</strong>
+              <code>{color}</code>
+            </div>
+          ))}
+        </div>
+        <div class="type-specimen panel">
+          <p class="eyebrow">ALFA SANS · 400 / 500 / 700</p>
+          <h2>Большие идеи начинаются здесь</h2>
+          <p>Аа Бб Вв Гг Дд Ее Жж · 0123456789 · ₽</p>
+          <div class="row">
+            <code>--radius-card: 32px</code>
+            <code>--space-unit: 8px</code>
+          </div>
+        </div>
+      </section>
+      <section id="buttons" class="kit-section">
+        <div class="kit-section-title">
+          <span>02</span>
+          <h2>Кнопки и иконки</h2>
+          <UI.Badge>Button · Icon</UI.Badge>
+        </div>
+        <div class="specimen panel">
+          <div class="row">
+            <UI.Button data-toast="Основное действие выполнено">
+              Основная
+            </UI.Button>
+            <UI.Button variant="secondary" data-toast="Дополнительное действие">
+              Вторичная
+            </UI.Button>
+            <UI.Button variant="ghost" data-toast="Текстовое действие">
+              Текстовая ↗
+            </UI.Button>
+            <UI.Button disabled>Недоступная</UI.Button>
+          </div>
+          <div class="row">
+            <UI.Button size="sm" data-toast="Маленькая кнопка">
+              Маленькая
+            </UI.Button>
+            <UI.Button size="lg" data-toast="Большая кнопка">
+              Большая <UI.Icon name="arrow" size={18} />
+            </UI.Button>
+            <button
+              class="icon-button"
+              data-toast="Поиск — пример действия"
+              aria-label="Поиск"
+            >
+              <UI.Icon name="search" />
+            </button>
+          </div>
+          <div class="icon-grid">
+            {[
+              "arrow",
+              "chevron",
+              "check",
+              "close",
+              "search",
+              "menu",
+              "user",
+              "grid",
+              "clock",
+              "upload",
+              "shield",
+              "wallet",
+              "spark",
+            ].map((name) => (
+              <div>
+                <UI.Icon name={name} />
+                <code>{name}</code>
+              </div>
+            ))}
+          </div>
+          <code class="code-block">
+            {'<Button variant="primary" size="lg">Продолжить</Button>'}
+          </code>
+        </div>
+      </section>
+      <section id="fields" class="kit-section">
+        <div class="kit-section-title">
+          <span>03</span>
+          <h2>Поля и выбор</h2>
+          <UI.Badge>Field · Select · Checkbox</UI.Badge>
+        </div>
+        <div class="specimen panel">
+          <div class="form-grid">
+            <UI.Field
+              label="Название компании"
+              name="kit-company"
+              placeholder="ООО «Пример»"
+              hint="Подсказка под полем"
+            />
+            <UI.Field
+              label="ИНН"
+              name="kit-inn"
+              value="123"
+              error="Введите 10 или 12 цифр"
+            />
+            <UI.Select
+              label="Цель финансирования"
+              name="kit-purpose"
+              options={[
+                "Оборотные средства",
+                "Оборудование",
+                "Развитие бизнеса",
+              ]}
+            />
+            <UI.Field
+              label="Электронная почта"
+              name="kit-email"
+              type="email"
+              placeholder="example@company.ru"
+            />
+          </div>
+          <div class="row">
+            <UI.Checkbox name="kit-consent" checked>
+              Выбранное состояние
+            </UI.Checkbox>
+            <UI.Checkbox name="kit-option">Дополнительная опция</UI.Checkbox>
+          </div>
+          <code class="code-block">
+            {'<Field label="ИНН" name="inn" hint="10 или 12 цифр" />'}
+          </code>
+        </div>
+      </section>
+      <section id="feedback" class="kit-section">
+        <div class="kit-section-title">
+          <span>04</span>
+          <h2>Обратная связь</h2>
+          <UI.Badge>Badge · Alert · Modal</UI.Badge>
+        </div>
+        <div class="specimen panel">
+          <div class="row">
+            <UI.Badge>Черновик</UI.Badge>
+            <UI.Badge tone="info">На рассмотрении</UI.Badge>
+            <UI.Badge tone="success">Готово</UI.Badge>
+            <UI.Badge tone="warning">Нужны документы</UI.Badge>
+            <UI.Badge tone="danger">Ошибка</UI.Badge>
+          </div>
+          <UI.Alert tone="info" title="Всё под контролем">
+            <p>Статус и дальнейшие действия всегда перед глазами.</p>
+          </UI.Alert>
+          <UI.Alert tone="success" title="Документ загружен">
+            <p>Пример успешного состояния.</p>
+          </UI.Alert>
+          <UI.Alert tone="warning" title="Проверьте данные">
+            <p>Для продолжения заполните обязательные поля.</p>
+          </UI.Alert>
+          <UI.Alert tone="danger" title="Не удалось отправить">
+            <p>Попробуйте ещё раз. Введённые данные сохранены.</p>
+          </UI.Alert>
+          <div class="row">
+            <UI.Button data-open-modal="kit-modal">
+              Открыть модальное окно
+            </UI.Button>
+            <UI.Button variant="secondary" data-toast="Изменения сохранены">
+              Показать уведомление
+            </UI.Button>
+          </div>
+        </div>
+        <UI.Modal id="kit-modal" title="Всё готово к следующему шагу">
+          <p>
+            Окно закрывается кнопкой, клавишей Escape или кликом по фону. Фокус
+            возвращается на исходную кнопку.
+          </p>
+        </UI.Modal>
+      </section>
+      <section id="navigation" class="kit-section">
+        <div class="kit-section-title">
+          <span>05</span>
+          <h2>Навигация</h2>
+          <UI.Badge>Tabs · Stepper · Accordion</UI.Badge>
+        </div>
+        <div class="specimen panel">
+          <UI.Stepper
+            steps={["Потребность", "Данные компании", "Проверка", "Результат"]}
+            current={1}
+          />
+          <UI.Tabs
+            items={[
+              { label: "О продукте", value: "about" },
+              { label: "Условия", value: "terms" },
+              { label: "Документы", value: "documents" },
+            ]}
+          >
+            <div slot="about" class="tab-example">
+              <h3>Понятно с первого взгляда</h3>
+              <p>Вкладки работают с клавиатуры: стрелки, Home и End.</p>
+            </div>
+            <div slot="terms" class="tab-example">
+              <h3>Условия под вашим контролем</h3>
+              <p>Содержимое меняется без перезагрузки страницы.</p>
+            </div>
+            <div slot="documents" class="tab-example">
+              <h3>Всё нужное в одном месте</h3>
+              <p>Демонстрация панели документов.</p>
+            </div>
+          </UI.Tabs>
+          <UI.Accordion items={faq} />
+        </div>
+      </section>
+      <section id="cards" class="kit-section">
+        <div class="kit-section-title">
+          <span>06</span>
+          <h2>Карточки и промо</h2>
+          <UI.Badge>ProductCard · PromoTile</UI.Badge>
+        </div>
+        <div class="product-grid">
+          {products.map((x) => (
+            <UI.ProductCard {...x} />
+          ))}
+        </div>
+        <div class="bento-small">
+          <UI.PromoTile
+            title="Кредит наличными"
+            image="/assets/cash.png"
+            href="/#calculator"
+          />
+          <UI.PromoTile
+            title="Привилегии от Alfa Only"
+            image="/assets/only.png"
+          />
+        </div>
+      </section>
+      <section id="data" class="kit-section">
+        <div class="kit-section-title">
+          <span>07</span>
+          <h2>Данные и состояния</h2>
+          <UI.Badge>ApplicationTable · EmptyState</UI.Badge>
+        </div>
+        <div class="panel">
+          <UI.ApplicationTable rows={applications} />
+        </div>
+        <div class="panel">
+          <UI.EmptyState
+            title="Здесь будут ваши заявки"
+            description="Начните с подбора финансирования под задачу бизнеса."
+          >
+            <UI.Button href="/cabinet/">Создать первую заявку</UI.Button>
+          </UI.EmptyState>
+        </div>
+      </section>
+      <section id="composition" class="kit-section">
+        <div class="kit-section-title">
+          <span>08</span>
+          <h2>Готовые блоки</h2>
+          <UI.Badge>Sections</UI.Badge>
+        </div>
+        <p class="muted">
+          Header, Footer, Calculator и составные страницы используют те же
+          примитивы.
+        </p>
+        <Calculator id="kit-calculator" />
+        <div class="panel specimen">
+          <h3>Начните с одного импорта</h3>
+          <code class="code-block">
+            {'import { Button, Field, ProductCard } from "./components/ui";'}
+          </code>
+          <p class="muted">
+            Стили: src/styles/global.css · Компоненты: src/components/ui ·
+            Данные: src/data
+          </p>
+        </div>
+      </section>
+    </div>
+  </div>
+</Layout>

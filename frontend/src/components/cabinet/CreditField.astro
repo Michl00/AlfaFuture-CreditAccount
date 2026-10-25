@@ -1,0 +1,25 @@
+---
+import type { HTMLAttributes } from "astro/types";
+interface Props extends HTMLAttributes<"input"> {
+  label: string;
+  hint?: string;
+  options?: { value: string; label: string }[];
+}
+const { label, hint, options, name, value, ...rest } = Astro.props;
+---
+
+<label class="credit-field">
+  <span>{label}</span>
+  {options ? (
+    <select name={name} {...rest}>
+      {options.map((o) => (
+        <option value={o.value} selected={o.value === String(value)}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  ) : (
+    <input name={name} value={value} {...rest} />
+  )}{" "}
+  {hint && <small>{hint}</small>}
+</label>

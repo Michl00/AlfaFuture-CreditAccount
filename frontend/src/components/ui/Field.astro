@@ -1,0 +1,40 @@
+---
+import type { HTMLAttributes } from "astro/types";
+interface Props {
+  label: string;
+  name: string;
+  type?: HTMLAttributes<"input">["type"];
+  placeholder?: string;
+  value?: string;
+  hint?: string;
+  error?: string;
+  required?: boolean;
+}
+const {
+  label,
+  name,
+  type = "text",
+  placeholder,
+  value,
+  hint,
+  error,
+  required = false,
+} = Astro.props;
+---
+
+<label class:list={["field", { "field--error": error }]}>
+  <span>
+    {label}
+    {required && <span aria-hidden="true"> *</span>}
+  </span>
+  <input
+    name={name}
+    type={type}
+    placeholder={placeholder}
+    value={value}
+    required={required}
+    aria-invalid={error ? "true" : undefined}
+    aria-describedby={hint || error ? `${name}-hint` : undefined}
+  />
+  {(hint || error) && <small id={`${name}-hint`}>{error || hint}</small>}
+</label>

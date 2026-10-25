@@ -1,0 +1,14 @@
+Alfa Future UI — notices
+
+1. Astro 7.4.2 — MIT — https://github.com/withastro/astro
+2. @astrojs/check 0.9.9 — MIT — https://github.com/withastro/language-tools
+3. TypeScript 5.9.3 — Apache-2.0 — https://github.com/microsoft/TypeScript
+4. Transitive dependencies and resolved versions: package-lock.json and their installed license files.
+5. Alfa Sans fonts, Alfa-Bank branding and promotional illustrations: downloaded from alfabank.servicecdn.ru as referenced by https://alfabank.sale on 2026-10-23. Exact URLs: docs/asset-sources.json. Rights belong to their respective owners; this project grants no license to those materials. Hero illustration includes © 2026 MIRACULOUS CORP as shown in the original asset. Use is for the requested educational design demo; permission for wider redistribution has not been verified.
+6. Existing FastAPI backend and its dependencies remain separate and are not bundled into the static frontend deployment.
+7. No models, third-party datasets, paid APIs, analytics, banking integrations or live financial operations are used by this frontend. Application records and company information are synthetic. Local submission is a browser-only simulation; credit checks and credit decisions are not implemented here.
+8. Docker base images: node (Node.js / bundled software licenses) and nginx (BSD-2-Clause / bundled software licenses). Docker tags are fixed in Dockerfile; dependency graph is locked by package-lock.json.
+
+9. Development formatting: Prettier 3.9.10 — MIT — https://github.com/prettier/prettier; prettier-plugin-astro 1.1.1 — MIT — https://github.com/withastro/prettier-plugin-astro.
+
+10. Additional business-credit illustration: https://alfabank.servicecdn.ru/site-upload/60/09/1676/D001_KV_558x456_02072026.png, referenced by the business-credit page on 2026-10-23. Same rights limitations as item 5.

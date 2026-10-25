@@ -1,0 +1,96 @@
+---
+import Layout from "../../layouts/CabinetLayout.astro";
+import Heading from "../../components/cabinet/PageHeading.astro";
+import Field from "../../components/cabinet/CreditField.astro";
+import Progress from "../../components/cabinet/CreditProgress.astro";
+import RequestCard from "../../components/cabinet/RequestCard.astro";
+import StatusPill from "../../components/cabinet/StatusPill.astro";
+import { Button } from "../../components/ui";
+import { demoRequests } from "../../data/cabinet";
+---
+
+<Layout title="Компоненты кабинета">
+  <Heading
+    title="Компоненты кабинета"
+    description="Astro-компоненты в светлой теме рабочего интерфейса. Образцы для интеграции."
+  />
+  <section class="credit-white-card">
+    <h2>PageHeading + CabinetLayout</h2>
+    <p>
+      Общая оболочка: меню, рабочая область, заголовок, мобильная навигация.
+      Этот экран использует те же компоненты, что и кабинет.
+    </p>
+  </section>
+  <section class="credit-audit">
+    <h2>CreditField + CreditProgress + Button</h2>
+    <div class="credit-form-layout">
+      <div>
+        <div class="credit-white-card">
+          <h2>Условия финансирования</h2>
+          <Field
+            label="Цель кредита"
+            name="example-purpose"
+            value="growth"
+            options={[
+              { value: "growth", label: "Развитие бизнеса" },
+              { value: "working", label: "Оборотные средства" },
+            ]}
+          />
+          <div class="form-grid">
+            <Field
+              label="Сумма, ₽"
+              name="example-amount"
+              value="2000000"
+              type="number"
+            />
+            <Field
+              label="Срок, месяцев"
+              name="example-term"
+              value="24"
+              type="number"
+            />
+          </div>
+          <Field
+            label="Поле с подсказкой"
+            name="example-hint"
+            value="Только синтетические данные"
+            hint="Подпись под контролом"
+          />
+        </div>
+        <div class="credit-form-actions">
+          <Button href="/cabinet/new/">Открыть анкету</Button>
+          <Button href="/cabinet/" variant="secondary">
+            К продуктам
+          </Button>
+        </div>
+      </div>
+      <Progress />
+    </div>
+  </section>
+  <section class="credit-audit credit-white-card">
+    <h2>StatusPill</h2>
+    <div class="credit-audit-links">
+      {(["bank_review", "needs_info", "approved", "rejected"] as const).map(
+        (status) => (
+          <StatusPill status={status} />
+        ),
+      )}
+    </div>
+  </section>
+  <section class="credit-audit">
+    <h2>RequestCard</h2>
+    <RequestCard request={demoRequests[0]} />
+  </section>
+  <p class="credit-footnote">
+    Сетка, палитра и геометрия описаны в разборе референсов. Образцы выше —
+    настоящие компоненты интерфейса, а не изображения.
+  </p>
+  <div class="credit-audit-links">
+    <a class="credit-text-link" href="/cabinet/design/">
+      Сверка с образцом ↗
+    </a>
+    <a class="credit-text-link" href="/components/">
+      Полный каталог UI ↗
+    </a>
+  </div>
+</Layout>

@@ -1,0 +1,19 @@
+---
+interface Props {
+  steps: string[];
+  current?: number;
+}
+const { steps, current = 0 } = Astro.props;
+---
+
+<ol class="stepper" aria-label="Этапы заявки">
+  {steps.map((x, i) => (
+    <li
+      class:list={[{ "is-current": i === current, "is-complete": i < current }]}
+      aria-current={i === current ? "step" : undefined}
+    >
+      <span>{i < current ? "✓" : i + 1}</span>
+      {x}
+    </li>
+  ))}
+</ol>

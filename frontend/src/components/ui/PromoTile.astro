@@ -1,0 +1,27 @@
+---
+interface Props {
+  title: string;
+  image: string;
+  color?: string;
+  href?: string;
+  class?: string;
+}
+const {
+  title,
+  image,
+  color = "#dfbfff",
+  href = "/cabinet/",
+  class: cls,
+} = Astro.props;
+---
+
+<a
+  class:list={["promo-tile", cls]}
+  style={`background-color:${color};background-image:url('${image}')`}
+  href={href}
+>
+  <h3>{title}</h3>
+  <span class="tile-arrow" aria-hidden="true">
+    ↗
+  </span>
+</a>

@@ -1,0 +1,19 @@
+---
+import Icon from "./Icon.astro";
+interface Props {
+  tone?: "info" | "success" | "warning" | "danger";
+  title?: string;
+}
+const { tone = "info", title } = Astro.props;
+---
+
+<div
+  class:list={["alert", `alert--${tone}`]}
+  role={tone === "danger" ? "alert" : "status"}
+>
+  <Icon name={tone === "success" ? "check" : "shield"} />
+  <div>
+    {title && <strong>{title}</strong>}
+    <slot />
+  </div>
+</div>

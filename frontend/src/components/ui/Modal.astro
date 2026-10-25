@@ -1,0 +1,27 @@
+---
+import Button from "./Button.astro";
+import Icon from "./Icon.astro";
+interface Props {
+  id: string;
+  title: string;
+}
+const { id, title } = Astro.props;
+---
+
+<dialog id={id} class="modal" aria-labelledby={`${id}-title`}>
+  <button
+    type="button"
+    class="icon-button modal-close"
+    data-close-modal
+    aria-label="Закрыть"
+  >
+    <Icon name="close" />
+  </button>
+  <h2 id={`${id}-title`}>{title}</h2>
+  <slot />
+  <form method="dialog">
+    <Button variant="secondary" type="submit">
+      Понятно
+    </Button>
+  </form>
+</dialog>

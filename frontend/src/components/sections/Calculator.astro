@@ -1,0 +1,72 @@
+---
+import { Button } from "../ui";
+interface Props {
+  id?: string;
+}
+const { id = "calculator" } = Astro.props;
+---
+
+<section class="calculator-section" id={id}>
+  <div class="section-heading">
+    <p class="eyebrow">ВАШИ ПЛАНЫ — НАШИ ВОЗМОЖНОСТИ</p>
+    <h2>Рассчитайте свой кредит</h2>
+    <p>Начните с комфортного платежа</p>
+  </div>
+  <div class="calculator panel" data-calculator>
+    <div class="calculator-inputs">
+      <div class="range-field">
+        <label for={`${id}-amount`}>
+          Сумма кредита <output data-amount>2 000 000 ₽</output>
+        </label>
+        <input
+          id={`${id}-amount`}
+          aria-label="Сумма кредита"
+          data-amount-range
+          type="range"
+          min="100000"
+          max="10000000"
+          step="50000"
+          value="2000000"
+        />
+        <div class="range-labels">
+          <span>100 тыс. ₽</span>
+          <span>10 млн ₽</span>
+        </div>
+      </div>
+      <div class="range-field">
+        <label for={`${id}-term`}>
+          Срок <output data-term>24 месяца</output>
+        </label>
+        <input
+          id={`${id}-term`}
+          aria-label="Срок кредита в месяцах"
+          data-term-range
+          type="range"
+          min="6"
+          max="60"
+          step="1"
+          value="24"
+        />
+        <div class="range-labels">
+          <span>6 месяцев</span>
+          <span>5 лет</span>
+        </div>
+      </div>
+      <p class="muted small">
+        Пример расчёта при условной ставке 24% годовых.
+        <br />
+        Не является предложением банка.
+      </p>
+    </div>
+    <div class="calculator-result">
+      <span class="muted">Ежемесячный платёж</span>
+      <strong data-payment aria-live="polite">
+        105 742 ₽
+      </strong>
+      <p>Понятный расчёт для ваших планов</p>
+      <Button href="/cabinet/" size="lg">
+        Подобрать финансирование <span>↗</span>
+      </Button>
+    </div>
+  </div>
+</section>

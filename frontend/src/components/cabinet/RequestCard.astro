@@ -1,0 +1,34 @@
+---
+import { money, type CreditRequest } from "../../data/cabinet";
+import StatusPill from "./StatusPill.astro";
+interface Props {
+  request: CreditRequest;
+}
+const { request: x } = Astro.props;
+---
+
+<a
+  class="credit-request"
+  href={`/cabinet/application/?id=${x.id}`}
+  data-request-card
+  data-request-status={x.status}
+>
+  <div class="request-top">
+    <span class="request-id">№ {x.id}</span>
+    <span>{x.company}</span>
+  </div>
+  <p class="request-label">Запрошенная сумма</p>
+  <strong class="request-amount">{money(x.amount)}</strong>
+  <h3>{x.title}</h3>
+  <div class="request-bottom">
+    <div>
+      <span>Статус заявки</span>
+      <StatusPill status={x.status} />
+    </div>
+    <div>
+      <span>Срок финансирования</span>
+      <strong>{x.months} мес.</strong>
+    </div>
+    <span class="request-open">Подробнее</span>
+  </div>
+</a>

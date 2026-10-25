@@ -1,0 +1,15 @@
+---
+import Icon from "./Icon.astro";
+interface Props {
+  title: string;
+  description: string;
+}
+const { title, description } = Astro.props;
+---
+
+<div class="empty-state">
+  <Icon name="wallet" size={40} />
+  <h3>{title}</h3>
+  <p>{description}</p>
+  <slot />
+</div>

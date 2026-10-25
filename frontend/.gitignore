@@ -1,0 +1,4 @@
+node_modules/
+dist/
+.astro/
+.openai/*.tar.gz

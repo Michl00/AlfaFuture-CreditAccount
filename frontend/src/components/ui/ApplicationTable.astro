@@ -1,0 +1,46 @@
+---
+import Badge from "./Badge.astro";
+interface Props {
+  rows: {
+    id: string;
+    company: string;
+    amount: string;
+    status: string;
+    tone: "info" | "success" | "warning" | "danger";
+  }[];
+}
+const { rows } = Astro.props;
+---
+
+<div class="table-scroll">
+  <table>
+    <caption class="sr-only">Демонстрационные заявки</caption>
+    <thead>
+      <tr>
+        <th>Заявка / компания</th>
+        <th>Сумма</th>
+        <th>Статус</th>
+        <th>Действие</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows.map((x) => (
+        <tr>
+          <td>
+            <strong>{x.company}</strong>
+            <small>№ {x.id}</small>
+          </td>
+          <td>{x.amount}</td>
+          <td>
+            <Badge tone={x.tone}>{x.status}</Badge>
+          </td>
+          <td>
+            <button class="text-button" data-application={x.id}>
+              Подробнее ↗
+            </button>
+          </td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>

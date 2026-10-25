@@ -1,0 +1,151 @@
+---
+import "../styles/global.css";
+import "../styles/cabinet.css";
+import { Icon, Modal } from "../components/ui";
+interface Props {
+  title: string;
+  active?: string;
+}
+const { title, active = "overview" } = Astro.props;
+const nav = [
+  {
+    id: "overview",
+    title: "Кредитные продукты",
+    icon: "wallet",
+    url: "/cabinet/",
+  },
+  {
+    id: "applications",
+    title: "Заявки",
+    icon: "document",
+    url: "/cabinet/applications/",
+  },
+  {
+    id: "documents",
+    title: "Отправка документов",
+    icon: "upload",
+    url: "/cabinet/documents/",
+  },
+  {
+    id: "company",
+    title: "Моя компания",
+    icon: "company",
+    url: "/cabinet/company/",
+  },
+];
+---
+
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <meta name="theme-color" content="#f2f3f5" />
+    <meta
+      name="description"
+      content="Учебный кредитный кабинет. Компоновка по опубликованным иллюстрациям справки alfabank.ru. Синтетические данные."
+    />
+    <link rel="icon" href="/favicon.svg" />
+    <link
+      rel="preload"
+      href="/assets/alfa-regular.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <title>{title} · Кредитный кабинет · Демо</title>
+  </head>
+  <body class="credit-app">
+    <a class="skip-link" href="#main">
+      Перейти к содержимому
+    </a>
+    <aside class="credit-sidebar" id="credit-sidebar">
+      <button
+        type="button"
+        class="credit-menu-close icon-button"
+        aria-label="Закрыть меню кабинета"
+        data-credit-menu-close
+      >
+        <Icon name="close" size={18} />
+      </button>
+      <a class="credit-brand" href="/cabinet/">
+        <span class="alfa-mark">А</span>
+        <span>
+          Альфа-Бизнес<small>Учебный кредитный кабинет</small>
+        </span>
+      </a>
+      <a class="credit-create" href="/cabinet/new/">
+        <span>+</span> Новая заявка
+      </a>
+      <span class="credit-menu-caption">МОИ СЕРВИСЫ</span>
+      <nav aria-label="Разделы кредитного кабинета">
+        {nav.map((x) => (
+          <a
+            href={x.url}
+            class:list={[{ "is-active": active === x.id }]}
+            aria-current={active === x.id ? "page" : undefined}
+          >
+            <Icon name={x.icon} size={18} />
+            <span>{x.title}</span>
+            {x.id === "applications" && (
+              <b class="sidebar-count" data-sidebar-count>
+                3
+              </b>
+            )}
+          </a>
+        ))}
+      </nav>
+      <div class="credit-sidebar-bottom">
+        <a href="/cabinet/design/">
+          <Icon name="grid" size={17} /> Разбор и референсы
+        </a>
+        <a href={active === "bank" ? "/cabinet/" : "/cabinet/bank/"}>
+          <Icon name="user" size={17} />
+          {active === "bank" ? "Кабинет клиента" : "Демо сотрудника"}
+        </a>
+        <a href="/cabinet/components/">
+          <Icon name="grid" size={17} /> Библиотека компонентов
+        </a>
+        <p>
+          Синтетические данные
+          <br />
+          Локальная демонстрация
+        </p>
+      </div>
+    </aside>
+    <div class="credit-workspace">
+      <header class="credit-mobile-header">
+        <button
+          type="button"
+          class="credit-menu icon-button"
+          aria-label="Открыть меню кабинета"
+          aria-expanded="false"
+          aria-controls="credit-sidebar"
+          data-credit-menu
+        >
+          <Icon name="menu" />
+        </button>
+        <span>Кредитные продукты</span>
+        <span class="credit-demo-label">Демо</span>
+      </header>
+      <main id="main" class="credit-main">
+        <slot />
+      </main>
+      <footer class="credit-footer">
+        <span>Alfa Future · Учебный прототип</span>
+        <span>Не официальный сервис банка. Операции не выполняются.</span>
+        <a href="/cabinet/design/">Основание дизайна ↗</a>
+      </footer>
+    </div>
+    <Modal id="credit-help" title="О демо">
+      <p data-credit-dialog-text>
+        Интерфейс работает локально на синтетических данных.
+      </p>
+    </Modal>
+    <div class="toast" role="status" aria-live="polite" hidden></div>
+    <script>
+      import "../scripts/cabinet";
+    </script>
+  </body>
+</html>

@@ -1,0 +1,31 @@
+---
+import Icon from "./Icon.astro";
+interface Props {
+  title: string;
+  description?: string;
+  image?: string;
+  color?: string;
+  href?: string;
+  eyebrow?: string;
+}
+const {
+  title,
+  description,
+  image,
+  color = "#e8e9ec",
+  href = "/cabinet/",
+  eyebrow,
+} = Astro.props;
+---
+
+<a class="product-card" href={href} style={`--card-color:${color}`}>
+  <div>
+    {eyebrow && <span class="eyebrow">{eyebrow}</span>}
+    <h3>{title}</h3>
+    {description && <p>{description}</p>}
+  </div>
+  {image && <img src={image} alt="" loading="lazy" />}
+  <span class="circle-arrow">
+    <Icon />
+  </span>
+</a>
