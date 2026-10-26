@@ -45,19 +45,15 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 201, response.text)
         self.assertIsNone(response.json()['inn'])
 
-    async def test_demo_and_assets(self):
-        response = await self.client.get('/demo')
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('text/html', response.headers['content-type'])
-        self.assertEqual(response.headers['referrer-policy'], 'no-referrer')
-        self.assertEqual(response.headers['cache-control'], 'no-store')
-        self.assertEqual((await self.client.get('/')).status_code, 200)
-        for asset, content_type in [('app.js', 'javascript'), ('credit.js', 'javascript'), ('bank.js', 'javascript'), ('style.css', 'text/css')]:
-            path = f'/demo/assets/{asset}'
-            self.assertIn(path, response.text)
-            asset_response = await self.client.get(path)
-            self.assertEqual(asset_response.status_code, 200)
-            self.assertIn(content_type, asset_response.headers['content-type'])
+    async def test_entry_points_only_open_new_cabinet(self):
+        for path in ('/', '/demo', '/demo/'):
+            response = await self.client.get(path)
+            self.assertEqual(response.status_code, 307)
+            self.assertEqual(response.headers['location'], '/cabinet/')
+            self.assertEqual(response.headers['cache-control'], 'no-store')
+        for asset in ('index.html', 'app.js', 'credit.js', 'bank.js', 'style.css'):
+            response = await self.client.get(f'/demo/assets/{asset}')
+            self.assertEqual(response.status_code, 404)
 
     async def test_register_login_profile_update_and_logout(self):
         self.assertEqual((await self.client.get('/profile')).status_code, 401)

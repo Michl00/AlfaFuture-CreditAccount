@@ -163,7 +163,7 @@ flowchart LR
 
 Для подключения ИИ укажите название, адрес API, ключ и модель в `.env` или переменных окружения Coolify. Поддерживается протокол OpenAI Chat Completions; название `PROVIDER` служит меткой, а адрес задаётся через `PROVIDER_BASE_URL`. Без ключа, адреса или модели помощник явно использует резервные правила. Проверка живого подключения: `python scripts/verify-provider.py` (расходует квоту провайдера).
 
-Для новой PostgreSQL-базы выполнить `alembic upgrade head` и задать `AUTO_CREATE_SCHEMA=false`. Исторический интерфейс доступен на `/demo` при прямом запуске FastAPI.
+Для новой PostgreSQL-базы выполнить `alembic upgrade head` и задать `AUTO_CREATE_SCHEMA=false`. Единственный интерфейс — новый кабинет `/cabinet/`; `/` и прежний адрес `/demo` перенаправляют в него. Docker-образ API включает production-сборку кабинета.
 
 ## Проверки
 

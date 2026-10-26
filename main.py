@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from config.config import Config, load_config
@@ -57,25 +57,13 @@ app.include_router(credit_router)
 app.include_router(bank_router)
 app.include_router(applications_router)
 app.include_router(documents_router)
-demo_directory = Path(__file__).resolve().parent / "static" / "demo"
-app.mount("/demo/assets", StaticFiles(directory=demo_directory), name="demo-assets")
 
 
 @app.get("/", include_in_schema=False)
 @app.get("/demo", include_in_schema=False)
-async def demo(request: Request):
-    product_index = (
-        Path(__file__).resolve().parent / "frontend" / "dist" / "cabinet" / "index.html"
-    )
-    if request.url.path == "/" and product_index.exists():
-        return FileResponse(product_index, headers={"Cache-Control": "no-store"})
-    return FileResponse(
-        demo_directory / "index.html",
-        headers={
-            "Cache-Control": "no-store",
-            "Referrer-Policy": "no-referrer",
-        },
-    )
+@app.get("/demo/", include_in_schema=False)
+async def cabinet_entry():
+    return RedirectResponse("/cabinet/", headers={"Cache-Control": "no-store"})
 
 
 app.include_router(
@@ -150,5 +138,5 @@ if frontend_build.exists():
 @app.get("/favicon.svg", include_in_schema=False)
 async def favicon():
     return FileResponse(
-        Path(__file__).resolve().parent / "frontend" / "public" / "favicon.svg"
+        frontend_build / "favicon.svg"
     )
