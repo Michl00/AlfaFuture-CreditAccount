@@ -191,7 +191,7 @@ class CreditAPITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_key_fails_explicitly_without_network(self):
         await self.login()
-        with patch.object(credit.config.comet, 'api_key', ''), patch('services.credit_api.httpx.AsyncClient') as client:
+        with patch.object(credit.config.provider, 'api_key', ''), patch('services.credit_api.httpx.AsyncClient') as client:
             response = await self.client.post('/credit/recommendations', json={'goal': 'Оборудование', 'requestedAmount': 1500000, 'requestedMonths': 24})
         self.assertEqual(response.status_code, 503)
         client.assert_not_called()
@@ -205,17 +205,24 @@ class CreditAPITests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 502)
 
 
-class CometClientTests(unittest.IsolatedAsyncioTestCase):
+class ProviderClientTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from config.config import ProviderConfig
+        patcher = patch.object(credit.config, 'provider', ProviderConfig(
+            name='test-provider', base_url='https://provider.example/v1/', model='test-model'))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     async def test_openai_compatible_request_uses_configured_model_and_auth(self):
         requests = []
         def handler(request):
             requests.append(request)
             return httpx.Response(200, json={'choices': [{'message': {'content': OFFERS.model_dump_json()}}]})
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        with patch.object(credit.config.comet, 'api_key', 'test-only-key'), patch.object(credit.config.comet, 'model', 'deepseek-v4.1-flash'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+        with patch.object(credit.config.provider, 'api_key', 'test-only-key'), patch.object(credit.config.provider, 'model', 'deepseek-v4.1-flash'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
             answer = await credit.ask_model('task', {'goal': 'Покупка оборудования'}, credit.GeneratedOffers)
         self.assertEqual(len(answer.offers), 2)
-        self.assertEqual(str(requests[0].url), 'https://api.cometapi.com/v1/chat/completions')
+        self.assertEqual(str(requests[0].url), 'https://provider.example/v1/chat/completions')
         self.assertEqual(requests[0].headers['Authorization'], 'Bearer test-only-key')
         self.assertEqual(json.loads(requests[0].content)['model'], 'deepseek-v4.1-flash')
 
@@ -223,7 +230,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
         body = {'risk': 'medium', 'reasons': ['Условия требуют проверки сотрудником']}
         client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
             json={'choices': [{'message': {'content': json.dumps(body)}}]})))
-        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+        with patch.object(credit.config.provider, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
             answer = await credit.ask_model('Оцени риски', {}, credit.RiskResult)
         self.assertEqual(answer.risk, 'medium')
         self.assertIsNone(answer.terms)
@@ -235,7 +242,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_malformed_model_output_is_rejected_without_leaking_raw_text(self):
         for body in [{'choices': [{'message': {'content': 'not json'}}]}, {'choices': []}]:
             client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
-            with patch.object(credit.config.comet, 'api_key', 'test-only-key'), patch.object(credit.config.comet, 'model', 'deepseek-v4.1-flash'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+            with patch.object(credit.config.provider, 'api_key', 'test-only-key'), patch.object(credit.config.provider, 'model', 'deepseek-v4.1-flash'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
                 with self.assertRaises(credit.HTTPException) as error:
                     await credit.ask_model('task', {}, credit.GeneratedOffers)
                 self.assertEqual(error.exception.detail, 'CREDIT_AI_INVALID_RESPONSE')
@@ -246,7 +253,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
                 (400, 'REQUEST_REJECTED'), (503, 'UNAVAILABLE')]:
             client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(status,
                 json={'error': {'message': 'private-provider-message'}})))
-            with patch.object(credit.config.comet, 'api_key', 'private-api-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
+            with patch.object(credit.config.provider, 'api_key', 'private-api-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
                 with self.assertRaises(credit.HTTPException) as error:
                     await credit.ask_model('task', {'goal': 'private-goal'}, credit.GeneratedOffers)
             self.assertEqual(error.exception.detail, 'CREDIT_AI_' + code)
@@ -262,7 +269,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(400, json={'error': {'param': 'response_format', 'message': 'unsupported parameter'}})
             return httpx.Response(200, json={'choices': [{'message': {'content': '```json\n' + OFFERS.model_dump_json() + '\n```'}}]})
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+        with patch.object(credit.config.provider, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
             result = await credit.ask_model('task', {}, credit.GeneratedOffers)
         self.assertEqual(len(result.offers), 2)
         self.assertEqual(len(requests), 2)
@@ -276,7 +283,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
                 calls.append(request)
                 raise exception('private network detail', request=request)
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-            with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+            with patch.object(credit.config.provider, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
                 with self.assertRaises(credit.HTTPException) as error:
                     await credit.ask_model('task', {}, credit.GeneratedOffers)
             self.assertEqual(error.exception.detail, 'CREDIT_AI_' + code)
@@ -288,7 +295,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.02)
             return httpx.Response(200, json={'choices': [{'message': {'content': OFFERS.model_dump_json()}}]})
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch.object(credit.config.comet, 'timeout_seconds', 0.5), patch('services.credit_api.httpx.AsyncClient', return_value=client) as factory:
+        with patch.object(credit.config.provider, 'api_key', 'test-key'), patch.object(credit.config.provider, 'timeout_seconds', 0.5), patch('services.credit_api.httpx.AsyncClient', return_value=client) as factory:
             result = await credit.ask_model('task', {}, credit.GeneratedOffers)
         self.assertEqual(len(result.offers), 2)
         self.assertEqual(factory.call_args.kwargs['timeout'].read, 0.5)
@@ -307,7 +314,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
                 cancelled.set()
                 raise
         client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch.object(credit.config.comet, 'timeout_seconds', 0.02), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
+        with patch.object(credit.config.provider, 'api_key', 'test-key'), patch.object(credit.config.provider, 'timeout_seconds', 0.02), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
             with self.assertRaises(credit.HTTPException) as error:
                 await credit.ask_model('task', {}, credit.GeneratedOffers)
         self.assertEqual(error.exception.status_code, 504)
@@ -322,7 +329,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
             def handler(request):
                 raise exception('private-network-detail', request=request)
             client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-            with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
+            with patch.object(credit.config.provider, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client), self.assertLogs(credit.logger, level='WARNING') as logs:
                 with self.assertRaises(credit.HTTPException):
                     await credit.ask_model('task', {}, credit.GeneratedOffers)
             self.assertIn('phase=' + phase, logs.output[0])
@@ -331,7 +338,7 @@ class CometClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_truncated_response_cannot_be_used_as_valid_advice(self):
         client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
             json={'choices': [{'finish_reason': 'length', 'message': {'content': OFFERS.model_dump_json()}}]})))
-        with patch.object(credit.config.comet, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
+        with patch.object(credit.config.provider, 'api_key', 'test-key'), patch('services.credit_api.httpx.AsyncClient', return_value=client):
             with self.assertRaises(credit.HTTPException) as error:
                 await credit.ask_model('task', {}, credit.GeneratedOffers)
         self.assertEqual(error.exception.detail, 'CREDIT_AI_RESPONSE_TRUNCATED')

@@ -17,15 +17,13 @@ Container runtime services:
 - nginx: BSD-2-Clause.
 - Python and Node base images contain components governed by their bundled notices.
 
-Model and proxy:
-- Qwen/Qwen3-235B-A22B, open weights, Apache-2.0:
-  https://huggingface.co/Qwen/Qwen3-235B-A22B
-- Supported alternatives Qwen3-30B-A3B and Qwen3-8B are configured by exact allowlisted model IDs.
-- CometAPI is a third-party hosted proxy: https://www.cometapi.com/qwen-3-api/
-  Its account terms, quota and charges apply when configured. No key is committed.
-- No weights are bundled or downloaded by the application. The proxy may update serving infrastructure independently.
-- Without the proxy the application explicitly uses deterministic rules, not a claimed LLM response.
-- The legacy prototype retains separate CometAPI settings and is outside the new cabinet's model path.
+Model and provider:
+- An OpenAI-compatible Chat Completions provider and model are selected by server configuration.
+  The configured provider's account terms, quota and charges apply. No key is committed.
+- No weights are bundled or downloaded by the application. The provider may update serving infrastructure independently.
+- Model licenses depend on the selected model; for an open-weights demo one option is
+  Qwen/Qwen3-235B-A22B, Apache-2.0: https://huggingface.co/Qwen/Qwen3-235B-A22B
+- Without a configured provider the application explicitly uses deterministic rules, not a claimed LLM response.
 
 Simulations, not real integrations:
 - EGRUL/EGRIP, BKI, FNS Transparent Business: deterministic synthetic DataSource adapters.

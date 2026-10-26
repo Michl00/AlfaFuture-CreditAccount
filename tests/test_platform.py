@@ -292,7 +292,7 @@ class ProductTests(unittest.IsolatedAsyncioTestCase):
         await self.login()
         row, _ = await self.submit({**DATA, "scenario": "overdue"})
         with patch(
-            "services.platform.adapters.CometAssistant.answer",
+            "services.platform.adapters.ConfiguredAssistant.answer",
             new_callable=AsyncMock,
             side_effect=httpx.ConnectError("offline"),
         ) as provider:
@@ -324,7 +324,7 @@ class ProductTests(unittest.IsolatedAsyncioTestCase):
         offered = await self.action(row, "offer", amount=1000000, months=36)
         self.assertEqual(offered.status_code, 200, offered.text)
         await self.login()
-        with patch("services.platform.adapters.CometAssistant.answer", new_callable=AsyncMock,
+        with patch("services.platform.adapters.ConfiguredAssistant.answer", new_callable=AsyncMock,
                    side_effect=httpx.ConnectError("offline")):
             response = await self.client.post("/api/v1/chat", json={
                 "message": "Объясни новые условия", "application_id": row["id"],
@@ -343,7 +343,7 @@ class ProductTests(unittest.IsolatedAsyncioTestCase):
     async def test_chat_provider_failure_is_explicit_and_persisted(self):
         await self.login()
         with patch(
-            "services.platform.adapters.CometAssistant.answer",
+            "services.platform.adapters.ConfiguredAssistant.answer",
             new_callable=AsyncMock,
             side_effect=httpx.ConnectError("offline"),
         ):

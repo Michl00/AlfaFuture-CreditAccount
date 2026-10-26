@@ -268,18 +268,23 @@ class DocumentParserTests(unittest.TestCase):
         self.assertTrue(mismatch['manual_review'])
         self.assertLess(mismatch['value'], clean['value'])
 
-    def test_comet_model_default_and_key_alias(self):
+    def test_provider_configuration(self):
         from config.config import load_config
-        with patch.dict(os.environ, {'SECRET': 'test-secret', 'COOKIE_SECURE': 'false', 'COMETAPI_KEY': 'new-test-key', 'COMETAPI_API_KEY': 'old-test-key'}, clear=True), patch('environs.Env.read_env'):
-            configured = load_config()
-            self.assertEqual(configured.comet.model, 'deepseek-v4.1-flash')
-            self.assertEqual(configured.comet.api_key, 'new-test-key')
-            os.environ['COMETAPI_KEY'] = ''
-            self.assertEqual(load_config().comet.api_key, 'old-test-key')
-            self.assertEqual(load_config().comet.timeout_seconds, 180)
-            os.environ['COMETAPI_TIMEOUT_SECONDS'] = '240'
-            self.assertEqual(load_config().comet.timeout_seconds, 240)
+        settings = {'SECRET': 'test-secret', 'COOKIE_SECURE': 'false',
+                    'PROVIDER': 'custom', 'PROVIDER_API_KEY': 'test-key',
+                    'PROVIDER_BASE_URL': 'https://provider.example/v1/',
+                    'PROVIDER_MODEL': 'custom-model'}
+        with patch.dict(os.environ, settings, clear=True), patch('environs.Env.read_env'):
+            configured = load_config().provider
+            self.assertEqual(configured.name, 'custom')
+            self.assertEqual(configured.api_key, 'test-key')
+            self.assertEqual(configured.model, 'custom-model')
+            self.assertEqual(configured.completions_url, 'https://provider.example/v1/chat/completions')
+            self.assertNotIn('test-key', repr(configured))
+            self.assertEqual(configured.timeout_seconds, 180)
+            os.environ['PROVIDER_TIMEOUT_SECONDS'] = '240'
+            self.assertEqual(load_config().provider.timeout_seconds, 240)
             for invalid in ('0', '301', 'nan'):
-                os.environ['COMETAPI_TIMEOUT_SECONDS'] = invalid
+                os.environ['PROVIDER_TIMEOUT_SECONDS'] = invalid
                 with self.assertRaises(ValueError):
                     load_config()

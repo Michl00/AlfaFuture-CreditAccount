@@ -161,7 +161,7 @@ def selected_context(data, user_id):
 
 
 async def ask_model(task, payload, schema):
-    if not config.comet.api_key or not config.comet.model:
+    if not config.provider.api_key or not config.provider.base_url or not config.provider.model:
         raise HTTPException(503, 'CREDIT_AI_NOT_CONFIGURED')
     system = (
         'Ты помощник по предварительному подбору бизнес-кредитов. Это не решение банка. '
@@ -170,15 +170,15 @@ async def ask_model(task, payload, schema):
         'Не придумывай проверенные кредитные истории, реестры или документы. '
         'Каталог и ограничения обязательны. Пиши кратко, без рассуждений вне JSON. ' + task + '\nJSON schema: ' + json.dumps(schema.model_json_schema(), ensure_ascii=False)
     )
-    request_body = {'model': config.comet.model, 'messages': [
+    request_body = {'model': config.provider.model, 'messages': [
         {'role': 'system', 'content': system},
         {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)},
     ], 'temperature': 0.2, 'max_tokens': 3500, 'response_format': {'type': 'json_object'}}
     async def request_completion():
-        async with httpx.AsyncClient(timeout=httpx.Timeout(config.comet.timeout_seconds,
+        async with httpx.AsyncClient(timeout=httpx.Timeout(config.provider.timeout_seconds,
                 connect=20, write=20, pool=10), follow_redirects=False) as client:
-            response = await client.post('https://api.cometapi.com/v1/chat/completions',
-                headers={'Authorization': f'Bearer {config.comet.api_key}'},
+            response = await client.post(config.provider.completions_url,
+                headers={'Authorization': f'Bearer {config.provider.api_key}'},
                 json=request_body)
             # Some OpenAI-compatible model routes reject JSON mode. Retry only an
             # explicit parameter rejection, never a timeout or completed generation.
@@ -191,20 +191,20 @@ async def ask_model(task, payload, schema):
                 except (ValueError, AttributeError):
                     unsupported = False
                 if unsupported:
-                    logger.warning('CometAPI retry reason=unsupported_response_format model=%s', config.comet.model)
+                    logger.warning('LLM provider retry reason=unsupported_response_format model=%s', config.provider.model)
                     request_body.pop('response_format')
-                    response = await client.post('https://api.cometapi.com/v1/chat/completions',
-                        headers={'Authorization': f'Bearer {config.comet.api_key}'}, json=request_body)
+                    response = await client.post(config.provider.completions_url,
+                        headers={'Authorization': f'Bearer {config.provider.api_key}'}, json=request_body)
             return response
 
     started = time.monotonic()
     try:
         # One total deadline includes connection and a possible JSON-mode retry.
-        response = await asyncio.wait_for(request_completion(), timeout=config.comet.timeout_seconds)
+        response = await asyncio.wait_for(request_completion(), timeout=config.provider.timeout_seconds)
         response.raise_for_status()
         choice = response.json()['choices'][0]
         if choice.get('finish_reason') == 'length':
-            logger.warning('CometAPI failure reason=truncated_response model=%s', config.comet.model)
+            logger.warning('LLM provider failure reason=truncated_response model=%s', config.provider.model)
             raise HTTPException(502, 'CREDIT_AI_RESPONSE_TRUNCATED')
         content = choice['message']['content']
         if not isinstance(content, str):
@@ -215,8 +215,8 @@ async def ask_model(task, payload, schema):
         if fenced:
             content = fenced.group(1)
         answer = schema.model_validate_json(content)
-        logger.info('CometAPI success model=%s schema=%s elapsed_seconds=%.1f',
-            config.comet.model, schema.__name__, time.monotonic() - started)
+        logger.info('LLM provider success model=%s schema=%s elapsed_seconds=%.1f',
+            config.provider.model, schema.__name__, time.monotonic() - started)
         return answer
     except httpx.HTTPStatusError as error:
         status = error.response.status_code
@@ -224,23 +224,23 @@ async def ask_model(task, payload, schema):
             402: 'CREDIT_AI_BALANCE_REQUIRED', 404: 'CREDIT_AI_MODEL_NOT_FOUND',
             429: 'CREDIT_AI_RATE_LIMIT', 400: 'CREDIT_AI_REQUEST_REJECTED',
             422: 'CREDIT_AI_REQUEST_REJECTED'}.get(status, 'CREDIT_AI_UNAVAILABLE')
-        logger.warning('CometAPI failure reason=%s upstream_status=%s model=%s', detail, status, config.comet.model)
+        logger.warning('LLM provider failure reason=%s upstream_status=%s model=%s', detail, status, config.provider.model)
         raise HTTPException(502, detail) from None
     except (httpx.TimeoutException, asyncio.TimeoutError) as error:
         phase = next((name for kind, name in ((httpx.ConnectTimeout, 'connect'), (httpx.ReadTimeout, 'read'),
             (httpx.WriteTimeout, 'write'), (httpx.PoolTimeout, 'pool')) if isinstance(error, kind)), 'total')
-        logger.warning('CometAPI failure reason=timeout phase=%s elapsed_seconds=%.1f limit_seconds=%s model=%s',
-            phase, time.monotonic() - started, config.comet.timeout_seconds, config.comet.model)
+        logger.warning('LLM provider failure reason=timeout phase=%s elapsed_seconds=%.1f limit_seconds=%s model=%s',
+            phase, time.monotonic() - started, config.provider.timeout_seconds, config.provider.model)
         raise HTTPException(504, 'CREDIT_AI_TIMEOUT') from None
     except httpx.RequestError:
-        logger.warning('CometAPI failure reason=connection_error model=%s', config.comet.model)
+        logger.warning('LLM provider failure reason=connection_error model=%s', config.provider.model)
         raise HTTPException(502, 'CREDIT_AI_CONNECTION_FAILED') from None
     except (KeyError, IndexError, AttributeError, TypeError, ValueError, ValidationError):
         # Log only a category, never upstream messages or credential/customer data.
-        logger.warning('CometAPI failure reason=invalid_response model=%s', config.comet.model)
+        logger.warning('LLM provider failure reason=invalid_response model=%s', config.provider.model)
         raise HTTPException(502, 'CREDIT_AI_INVALID_RESPONSE') from None
     except httpx.HTTPError:
-        logger.warning('CometAPI failure reason=transport_error model=%s', config.comet.model)
+        logger.warning('LLM provider failure reason=transport_error model=%s', config.provider.model)
         raise HTTPException(502, 'CREDIT_AI_UNAVAILABLE') from None
 
 

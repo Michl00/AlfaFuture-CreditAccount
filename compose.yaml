@@ -23,8 +23,12 @@ services:
       DEMO_MODE: 'true'
       AUTO_CREATE_SCHEMA: 'false'
       AI_WORKER_EMBEDDED: 'false'
-      COMETAPI_KEY: ${COMETAPI_KEY:-}
-      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-qwen3-235b-a22b}
+      PROVIDER: ${PROVIDER:-openai-compatible}
+      PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-}
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
+      PROVIDER_MODEL: ${PROVIDER_MODEL:-}
+      PROVIDER_TIMEOUT_SECONDS: ${PROVIDER_TIMEOUT_SECONDS:-180}
+      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,8 +45,12 @@ services:
       DATABASE_URL: postgresql+asyncpg://conveyor:${DB_PASSWORD:-local-synthetic-data-only}@postgres:5432/conveyor
       SECRET: ${SECRET:-local-demo-secret-please-change-before-public-hosting}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      COMETAPI_KEY: ${COMETAPI_KEY:-}
-      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-qwen3-235b-a22b}
+      PROVIDER: ${PROVIDER:-openai-compatible}
+      PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-}
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
+      PROVIDER_MODEL: ${PROVIDER_MODEL:-}
+      PROVIDER_TIMEOUT_SECONDS: ${PROVIDER_TIMEOUT_SECONDS:-180}
+      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-}
     depends_on:
       api:
         condition: service_healthy

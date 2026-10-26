@@ -6,7 +6,7 @@ Astro-интерфейс в визуальном стиле Альфа-Бизн�
 
 [Быстрый запуск](#быстрый-запуск) · [Сценарий демонстрации](#сценарий-демонстрации) · [Интерфейс](#интерфейс) · [Архитектура](#архитектура) · [Проверки](#проверки)
 
-![Обзор кредитного кабинета: заявки, статусы и обязательства компании](docs/screenshots/current/overview.jpg)
+![Обзор кредитного кабинета: заявки, статусы и обязательства компании](docs/screenshots/overview.jpg)
 
 ## Возможности
 
@@ -29,7 +29,7 @@ Astro-интерфейс в визуальном стиле Альфа-Бизн�
 
 ```sh
 cp .env.example .env
-# Для живого помощника добавьте COMETAPI_KEY в .env.
+# Для живого помощника заполните PROVIDER_BASE_URL, PROVIDER_API_KEY и PROVIDER_MODEL в .env.
 docker compose up --build
 ```
 
@@ -38,6 +38,14 @@ docker compose up --build
 - Демовход: **ИП**, **ООО** или **сотрудник банка**.
 
 Compose запускает web, API, worker и PostgreSQL 17. Миграции выполняются перед API. База хранится в volume `postgres_data`; `docker compose down` останавливает стенд с сохранением данных. Web-порт привязан к localhost.
+
+### Coolify
+
+Для размещения на сервере используйте отдельный [compose.coolify.yaml](compose.coolify.yaml):
+build pack **Docker Compose**, Base Directory `/`, Compose Location `/compose.coolify.yaml`.
+Назначьте HTTPS-домен сервису **web**, внутренний порт **80**. Coolify генерирует
+секреты; PostgreSQL сохраняется в volume, миграции запускаются автоматически.
+Подробные настройки, переменные и проверка запуска — в [инструкции Coolify](docs/coolify.md).
 
 ### Без Docker
 
@@ -74,40 +82,38 @@ Astro на `127.0.0.1:4321` проксирует `/api` к `127.0.0.1:8000`. П�
 
 ## Интерфейс
 
-Новые скриншоты сняты **25 октября 2026 года** с работающей сборки и отдельной тестовой базой. На них показан автономный режим **без ключа CometAPI**. Все изображения доступны в полном размере по клику; [полная галерея и условия съёмки](docs/screenshots/README.md).
-
 ### Анкета и помощник
 
 | Четыре этапа, плавающие подписи и серверный черновик | Опрос с выбором всех ответов перед отправкой |
 | --- | --- |
-| [![Анкета финансирования](docs/screenshots/current/wizard.jpg)](docs/screenshots/current/wizard.jpg) | [![Опрос помощника](docs/screenshots/current/assistant.jpg)](docs/screenshots/current/assistant.jpg) |
+| [![Анкета финансирования](docs/screenshots/wizard.jpg)](docs/screenshots/wizard.jpg) | [![Опрос помощника](docs/screenshots/assistant.jpg)](docs/screenshots/assistant.jpg) |
 
 ### Расчёт и прогноз
 
 | Платёж, стоимость и результаты проверок | Денежный поток в базовом и стресс-сценарии |
 | --- | --- |
-| [![Результат расчёта](docs/screenshots/current/assessment.jpg)](docs/screenshots/current/assessment.jpg) | [![Прогноз денежного потока](docs/screenshots/current/forecast.jpg)](docs/screenshots/current/forecast.jpg) |
+| [![Результат расчёта](docs/screenshots/assessment.jpg)](docs/screenshots/assessment.jpg) | [![Прогноз денежного потока](docs/screenshots/forecast.jpg)](docs/screenshots/forecast.jpg) |
 
 ### Работа с заявками
 
 | Статус, заключение и история заявки | Очередь кредитного аналитика |
 | --- | --- |
-| [![Карточка заявки](docs/screenshots/current/application.jpg)](docs/screenshots/current/application.jpg) | [![Очередь сотрудника](docs/screenshots/current/bank.jpg)](docs/screenshots/current/bank.jpg) |
+| [![Карточка заявки](docs/screenshots/application.jpg)](docs/screenshots/application.jpg) | [![Очередь сотрудника](docs/screenshots/bank.jpg)](docs/screenshots/bank.jpg) |
 
 <details>
 <summary>Вход, каталог, документы, профиль и мобильная версия</summary>
 
 | Вход в демонстрационные профили | Каталог финансирования |
 | --- | --- |
-| [![Вход](docs/screenshots/current/login.jpg)](docs/screenshots/current/login.jpg) | [![Каталог](docs/screenshots/current/catalog.jpg)](docs/screenshots/current/catalog.jpg) |
+| [![Вход](docs/screenshots/login.jpg)](docs/screenshots/login.jpg) | [![Каталог](docs/screenshots/catalog.jpg)](docs/screenshots/catalog.jpg) |
 
 | Документы компании | Профиль и обязательства |
 | --- | --- |
-| [![Документы](docs/screenshots/current/documents.jpg)](docs/screenshots/current/documents.jpg) | [![Профиль](docs/screenshots/current/company.jpg)](docs/screenshots/current/company.jpg) |
+| [![Документы](docs/screenshots/documents.jpg)](docs/screenshots/documents.jpg) | [![Профиль](docs/screenshots/company.jpg)](docs/screenshots/company.jpg) |
 
 **Мобильная анкета · ширина 390 px**
 
-<a href="docs/screenshots/current/mobile.jpg"><img src="docs/screenshots/current/mobile.jpg" width="280" alt="Мобильная анкета с этапами над формой и полями полной ширины" /></a>
+<a href="docs/screenshots/mobile.jpg"><img src="docs/screenshots/mobile.jpg" width="280" alt="Мобильная анкета с этапами над формой и полями полной ширины" /></a>
 
 </details>
 
@@ -122,7 +128,7 @@ flowchart LR
     API --> Rules["Риск-политика и расчёты"]
     API --> Sources["Моки реестра, БКИ и ФНС"]
     Worker["Worker ИИ-заключений"] <--> DB
-    Worker --> LLM["CometAPI · Qwen3"]
+    Worker --> LLM["OpenAI-совместимый провайдер"]
     API --> LLM
 ```
 
@@ -148,10 +154,16 @@ flowchart LR
 | `DB_PASSWORD` | Пароль PostgreSQL в Compose |
 | `AI_WORKER_EMBEDDED` | Встроенный worker для локального запуска; в Compose worker отдельный |
 | `AUTO_CREATE_SCHEMA` | `false` при использовании миграций Alembic |
-| `COMETAPI_KEY` | Необязательный ключ серверного прокси модели |
-| `ASSISTANT_MODEL` | Модель помощника: `qwen3-235b-a22b`, `qwen3-30b-a3b` или `qwen3-8b` |
+| `PROVIDER` | Название провайдера, возвращаемое в ответах ИИ; по умолчанию `openai-compatible` |
+| `PROVIDER_BASE_URL` | Корень OpenAI-совместимого API, включая `/v1`, если нужен; сервер добавляет `/chat/completions` |
+| `PROVIDER_API_KEY` | Серверный ключ выбранного провайдера (Bearer) |
+| `PROVIDER_MODEL` | ID модели у провайдера для обоих API |
+| `PROVIDER_TIMEOUT_SECONDS` | Общий таймаут исторического API: 30–300 секунд, по умолчанию 180 |
+| `ASSISTANT_MODEL` | Необязательный отдельный ID модели помощника; по умолчанию `PROVIDER_MODEL` |
 
-Для новой PostgreSQL-базы выполнить `alembic upgrade head` и задать `AUTO_CREATE_SCHEMA=false`. `COMETAPI_MODEL` относится к историческому API, а не к новому помощнику. Исторический интерфейс доступен на `/demo` при прямом запуске FastAPI.
+Для подключения ИИ укажите название, адрес API, ключ и модель в `.env` или переменных окружения Coolify. Поддерживается протокол OpenAI Chat Completions; название `PROVIDER` служит меткой, а адрес задаётся через `PROVIDER_BASE_URL`. Без ключа, адреса или модели помощник явно использует резервные правила. Проверка живого подключения: `python scripts/verify-provider.py` (расходует квоту провайдера).
+
+Для новой PostgreSQL-базы выполнить `alembic upgrade head` и задать `AUTO_CREATE_SCHEMA=false`. Исторический интерфейс доступен на `/demo` при прямом запуске FastAPI.
 
 ## Проверки
 
@@ -173,16 +185,12 @@ node tests/test_product_e2e.cjs
 
 Браузерный тест создаёт синтетическую заявку и проверяет путь до симуляции погашения, восстановление расчёта, опрос помощника и мобильную ширину. Чат в нём подменён; платный доступ к модели не требуется. PostgreSQL-тесты используют отдельные временные схемы. Для E2E рекомендуется отдельная база без ранее накопленных обязательств.
 
-[Отчёт серверных проверок](docs/verification-results.md) и [проверки восстановления UI](docs/design-restoration.md) фиксируют, какие проверки запускались. Новая съёмка интерфейса не является повторным прогоном всего набора тестов. Docker-сборка в локальной среде не подтверждена; команды проверки Compose и сборки включены в CI.
-
 ## Документация и ограничения
 
 - [Сверка с кейсом и демонстрационные сценарии](docs/case-verification.md)
-- [Аудит исходного задания](docs/task-audit.md)
 - [Архитектура, расчёты и состояния](docs/architecture.md)
 - [Frontend и сохранение дизайна](frontend/README.md)
-- [Галерея актуальной версии](docs/screenshots/README.md)
-- [План развития](docs/implementation-plan.md) · [исторический прототип](docs/legacy-prototype.md)
+- [План развития](docs/implementation-plan.md)
 - [Сторонние компоненты и материалы](THIRD_PARTY_NOTICES)
 
 Демопрофили общие: участники одного профиля видят его заявки. Реальные персональные данные и документы для демонстрации не нужны. Финансирование, скоринг и прогноз упрощены; реальных банковских проверок, юридического подписания и денежных операций нет. Для внешнего размещения нужны отдельные настройки HTTPS и секретов; SSO/MFA, боевые источники, архив аудита и банковская валидация моделей остаются следующими этапами.

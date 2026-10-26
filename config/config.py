@@ -29,14 +29,20 @@ class LogConfig:
     file: str
 
 @dataclass
-class CometConfig:
+class ProviderConfig:
+    name: str = "openai-compatible"
+    base_url: str = ""
     api_key: str = field(default='', repr=False)
-    model: str = 'deepseek-v4.1-flash'
+    model: str = ''
     timeout_seconds: float = 180
 
     def __post_init__(self):
         if not 30 <= self.timeout_seconds <= 300:
-            raise ValueError('COMETAPI_TIMEOUT_SECONDS must be between 30 and 300')
+            raise ValueError('PROVIDER_TIMEOUT_SECONDS must be between 30 and 300')
+
+    @property
+    def completions_url(self):
+        return self.base_url.rstrip("/") + "/chat/completions"
 
 @dataclass
 class Config:
@@ -44,7 +50,7 @@ class Config:
     log: LogConfig
     auth: AuthConfig
     mail: MailConfig
-    comet: CometConfig = field(default_factory=CometConfig)
+    provider: ProviderConfig = field(default_factory=ProviderConfig)
 
 
 
@@ -72,9 +78,11 @@ def load_config(path: str | None = None) -> Config:
             starttls=env.bool('SMTP_STARTTLS', default=True),
             reset_password_url=env.str('RESET_PASSWORD_URL', default=''),
         ),
-        comet=CometConfig(
-            api_key=env.str('COMETAPI_KEY', default='') or env.str('COMETAPI_API_KEY', default=''),
-            model=env.str('COMETAPI_MODEL', default='deepseek-v4.1-flash'),
-            timeout_seconds=env.float('COMETAPI_TIMEOUT_SECONDS', default=180),
+        provider=ProviderConfig(
+            name=env.str('PROVIDER', default='openai-compatible'),
+            base_url=env.str('PROVIDER_BASE_URL', default='').strip().rstrip('/'),
+            api_key=env.str('PROVIDER_API_KEY', default=''),
+            model=env.str('PROVIDER_MODEL', default=''),
+            timeout_seconds=env.float('PROVIDER_TIMEOUT_SECONDS', default=180),
         ),
     )

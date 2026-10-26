@@ -166,7 +166,7 @@ class AssistantUnavailable(ValueError):
         super().__init__(reason)
 
 
-class CometAssistant(AssistantProvider):
+class ConfiguredAssistant(AssistantProvider):
     """Server-only proxy transport. No model downloads and no client-side key."""
 
     async def answer(self, messages, context):
@@ -175,12 +175,13 @@ class CometAssistant(AssistantProvider):
     async def _answer(self, messages, context):
         from config.config import load_config
 
-        key = load_config().comet.api_key
-        model = os.getenv("ASSISTANT_MODEL", "qwen3-235b-a22b")
+        provider = load_config().provider
+        key = provider.api_key
+        model = os.getenv("ASSISTANT_MODEL") or provider.model
         if not key:
             raise AssistantUnavailable("missing_key")
-        if model not in ("qwen3-235b-a22b", "qwen3-30b-a3b", "qwen3-8b"):
-            raise AssistantUnavailable("unsupported_model")
+        if not provider.base_url or not model:
+            raise AssistantUnavailable("missing_configuration")
         prompt = (
             "Ты консультант учебного кредитного кабинета малого бизнеса. Пиши по-русски, конкретно и кратко. "
             "Все данные синтетические. Не обещай одобрение, не меняй ставки, числа, статус и расчёты из контекста. "
@@ -220,14 +221,13 @@ class CometAssistant(AssistantProvider):
             "messages": [{"role": "system", "content": prompt}, *messages[-8:]],
             "temperature": 0.3,
             "max_tokens": 1800,
-            "enable_thinking": False,
             "response_format": {"type": "json_object"},
         }
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(70, connect=10), follow_redirects=False
         ) as client:
             response = await client.post(
-                "https://api.cometapi.com/v1/chat/completions",
+                provider.completions_url,
                 headers={"Authorization": "Bearer " + key},
                 json=body,
             )
@@ -244,7 +244,7 @@ class CometAssistant(AssistantProvider):
                 if unsupported:
                     body.pop("response_format")
                     response = await client.post(
-                        "https://api.cometapi.com/v1/chat/completions",
+                        provider.completions_url,
                         headers={"Authorization": "Bearer " + key},
                         json=body,
                     )
@@ -301,7 +301,7 @@ class CometAssistant(AssistantProvider):
                 "questions": clean,
                 "mode": "llm",
                 "model": model,
-                "provider": "comet",
+                "provider": provider.name,
                 **(
                     {"product": result["product"]}
                     if isinstance(result.get("product"), str)
@@ -391,7 +391,7 @@ class RulesAssistant(AssistantProvider):
 
 async def assistant(messages, context):
     try:
-        return await CometAssistant().answer(messages, context)
+        return await ConfiguredAssistant().answer(messages, context)
     except (
         TimeoutError,
         httpx.HTTPError,
@@ -412,7 +412,7 @@ async def assistant(messages, context):
 
 ASSISTANT_FAILURE_MESSAGES = {
     "missing_key": "Подключение к ИИ не настроено. Показано объяснение по данным заявки.",
-    "unsupported_model": "Выбранная модель ИИ не поддерживается. Показано объяснение по данным заявки.",
+    "missing_configuration": "Подключение к ИИ не настроено: укажите адрес API и модель. Показано объяснение по данным заявки.",
     "authentication": "Сервис ИИ отклонил ключ доступа. Нужно проверить подключение.",
     "quota": "Сервис ИИ сообщил об ограничении баланса или квоты.",
     "rate_limit": "Слишком много запросов к ИИ. Повторите вопрос немного позже.",

@@ -1,0 +1,92 @@
+# Coolify: Git repository → Docker Compose, base directory /.
+# Assign an HTTPS domain to web (internal port 80) only.
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: conveyor
+      POSTGRES_USER: conveyor
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U conveyor -d conveyor']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://conveyor:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/conveyor
+      SECRET: ${SERVICE_PASSWORD_64_AUTH}
+      COOKIE_SECURE: 'true'
+      DEMO_MODE: 'true'
+      AUTO_CREATE_SCHEMA: 'false'
+      AI_WORKER_EMBEDDED: 'false'
+      PROVIDER: ${PROVIDER:-openai-compatible}
+      PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-}
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
+      PROVIDER_MODEL: ${PROVIDER_MODEL:-}
+      PROVIDER_TIMEOUT_SECONDS: ${PROVIDER_TIMEOUT_SECONDS:-180}
+      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      RESET_PASSWORD_URL: ${RESET_PASSWORD_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 40s
+      retries: 10
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: [python, -m, services.platform.worker]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://conveyor:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/conveyor
+      SECRET: ${SERVICE_PASSWORD_64_AUTH}
+      COOKIE_SECURE: 'true'
+      PROVIDER: ${PROVIDER:-openai-compatible}
+      PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-}
+      PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}
+      PROVIDER_MODEL: ${PROVIDER_MODEL:-}
+      PROVIDER_TIMEOUT_SECONDS: ${PROVIDER_TIMEOUT_SECONDS:-180}
+      ASSISTANT_MODEL: ${ASSISTANT_MODEL:-}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    expose:
+      - '80'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1/api/v1/health']
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

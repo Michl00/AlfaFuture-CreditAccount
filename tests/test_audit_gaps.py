@@ -195,7 +195,7 @@ class BoundReviewTests(unittest.IsolatedAsyncioTestCase):
         await self.login()
         a = (await self.client.post("/api/v1/assessments", json=DATA)).json()
         with patch(
-            "services.platform.adapters.CometAssistant.answer",
+            "services.platform.adapters.ConfiguredAssistant.answer",
             new_callable=AsyncMock,
             side_effect=httpx.ConnectError("offline"),
         ):

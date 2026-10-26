@@ -1,6 +1,6 @@
 # Реализованная архитектура
 
-Новый продукт использует `/api/v1` и Astro-кабинет `/cabinet/`. Старый FastAPI-прототип и его API сохранены для совместимости, но новый UI не зависит от CometAPI-подбора старого интерфейса.
+Новый продукт использует `/api/v1` и Astro-кабинет `/cabinet/`. Старый FastAPI-прототип и его API сохранены для совместимости, но новый UI не зависит от ИИ-подбора старого интерфейса.
 
 ```mermaid
 flowchart LR
@@ -13,7 +13,7 @@ flowchart LR
     Worker[Worker: ИИ-заключения с lease] --> DB
     Worker --> Assistant
     API --> Assistant[AssistantProvider]
-    Assistant --> Comet[CometAPI → Qwen3 с открытыми весами]
+    Assistant --> Provider[OpenAI-совместимый API → настроенная модель]
     Assistant --> Rules[Явный резервный помощник по правилам]
     API --> Gateway[PaymentGateway → симулятор выплаты]
 ```
