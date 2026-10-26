@@ -31,6 +31,7 @@ from .models import (
     SessionToken,
 )
 from .review import apply_review, fact_catalog
+from .origins import check_login_origin
 
 router = APIRouter(prefix="/api/v1", tags=["conveyor"])
 DB = Annotated[AsyncSession, Depends(get_async_session)]
@@ -131,9 +132,7 @@ async def demo():
 async def login(data: Login, request: Request, response: Response, db: DB):
     if not demo_enabled():
         raise HTTPException(404, "DEMO_DISABLED")
-    origin = request.headers.get("origin")
-    if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
-        raise HTTPException(403, "ORIGIN_REJECTED")
+    check_login_origin(request)
     if await db.get(Account, data.profile) is None:
         try:
             await seed(db)

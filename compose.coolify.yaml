@@ -27,6 +27,9 @@ services:
       DEMO_MODE: 'true'
       AUTO_CREATE_SCHEMA: 'false'
       AI_WORKER_EMBEDDED: 'false'
+      # API has no published port; nginx is its trusted ingress.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
       PROVIDER: ${PROVIDER:-openai-compatible}
       PROVIDER_BASE_URL: ${PROVIDER_BASE_URL:-}
       PROVIDER_API_KEY: ${PROVIDER_API_KEY:-}

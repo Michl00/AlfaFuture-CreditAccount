@@ -36,6 +36,28 @@ jobs:
       - run: npm run build --prefix frontend
       - run: docker compose config --quiet
       - run: docker compose build
+      - name: Login through Compose and Coolify proxies
+        env:
+          SERVICE_PASSWORD_POSTGRES: ci-synthetic-db-password
+          SERVICE_PASSWORD_64_AUTH: ci-synthetic-auth-secret-at-least-thirty-two-characters
+        run: |
+          for stack_file in compose.yaml compose.coolify.yaml; do
+            docker compose -p deployment-smoke -f "$stack_file" up --build -d --wait --wait-timeout 180
+            if [ "$stack_file" = compose.coolify.yaml ]; then
+              docker compose -p deployment-smoke -f "$stack_file" exec -T api python - --base-url http://web --origin https://credit.example --forwarded-proto https --expect-secure-cookie < scripts/verify-deployment.py
+            else
+              docker compose -p deployment-smoke -f "$stack_file" exec -T api python - --base-url http://web --origin http://localhost:8080 < scripts/verify-deployment.py
+            fi
+            docker compose -p deployment-smoke -f "$stack_file" down -v
+          done
+      - name: Proxy smoke logs and cleanup
+        if: always()
+        env:
+          SERVICE_PASSWORD_POSTGRES: ci-synthetic-db-password
+          SERVICE_PASSWORD_64_AUTH: ci-synthetic-auth-secret-at-least-thirty-two-characters
+        run: |
+          docker compose -p deployment-smoke -f compose.coolify.yaml logs --tail=100
+          docker compose -p deployment-smoke -f compose.coolify.yaml down -v
       - run: npx --prefix frontend playwright install --with-deps chromium
       - name: Browser conveyor scenario
         run: |
