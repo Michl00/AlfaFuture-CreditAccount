@@ -1,0 +1,142 @@
+# Коллекция для расширения REST Client в VS Code.
+# Выполняйте запросы по порядку через Send Request, не все одновременно.
+# Включите сохранение cookie (rest-client.rememberCookiesForSubsequentRequests=true).
+# Cookie текущего профиля хранится клиентом; CSRF берётся из именованного ответа входа.
+# При новом расчёте измените requestKey; для проверки идемпотентности повторите
+# только submit с прежними assessment_id, fingerprint, data и requestKey.
+# Локально без Docker: http://127.0.0.1:8000
+@baseUrl = http://localhost:8080
+@requestKey = docs-flow-001
+@inputData = {"product":"working","amount":1500000,"months":24,"goal":"Пополнение оборотных средств","inn":"7701234560","revenue":1500000,"expenses":900000,"taxes":50000,"debt":20000,"cash":500000,"age":36,"scenario":"overdue","documents_attached":true}
+
+### 01. БД доступна: 200, status=ok
+GET {{baseUrl}}/api/v1/health
+
+### 02. Каталог, лимиты и сценарии: 200
+GET {{baseUrl}}/api/v1/catalog
+
+### 03. Вход ООО: 200, Set-Cookie и csrf. Нужен DEMO_MODE=true.
+# @name clientLogin
+POST {{baseUrl}}/api/v1/demo/login
+Content-Type: application/json
+
+{"profile":"ooo"}
+
+### 04. Профиль и сводка: 200
+GET {{baseUrl}}/api/v1/me
+
+### 05. Серверный черновик: 200, saved=true
+PUT {{baseUrl}}/api/v1/draft
+Content-Type: application/json
+X-CSRF-Token: {{clientLogin.response.body.$.csrf}}
+
+{{inputData}}
+
+### 06. Синтетический пакет документов: 200
+POST {{baseUrl}}/api/v1/documents/preview
+Content-Type: application/json
+X-CSRF-Token: {{clientLogin.response.body.$.csrf}}
+
+{{inputData}}
+
+### 07. Расчёт: 200, status=in_review, review_state=pending
+# @name assessment
+POST {{baseUrl}}/api/v1/assessments
+Content-Type: application/json
+X-CSRF-Token: {{clientLogin.response.body.$.csrf}}
+
+{{inputData}}
+
+### 08. Запустить заключение: 202 (или 200, если уже готово)
+POST {{baseUrl}}/api/v1/assessments/{{assessment.response.body.$.assessment_id}}/review
+X-CSRF-Token: {{clientLogin.response.body.$.csrf}}
+
+### 09. Повторять вручную до review_state=done или unavailable.
+# Должен работать embedded worker либо отдельный worker из Compose.
+GET {{baseUrl}}/api/v1/assessments/{{assessment.response.body.$.assessment_id}}?include_result=true
+
+### 10. Отправка: 201, status=in_review, version=1.
+# Повтор этого же запроса до смены профиля: 201 с тем же id.
+# @name submit
+POST {{baseUrl}}/api/v1/applications
+Content-Type: application/json
+X-CSRF-Token: {{clientLogin.response.body.$.csrf}}
+Idempotency-Key: {{requestKey}}
+
+{
+  "assessment_id": "{{assessment.response.body.$.assessment_id}}",
+  "data": {{inputData}},
+  "fingerprint": "{{assessment.response.body.$.fingerprint}}",
+  "consent": true
+}
+
+### 11. Вход сотрудника: 200; заменяет клиентскую сессию и CSRF.
+# @name bankLogin
+POST {{baseUrl}}/api/v1/demo/login
+Content-Type: application/json
+
+{"profile":"bank"}
+
+### 12. Очередь сотрудника: 200
+GET {{baseUrl}}/api/v1/applications?status=in_review&q=7701234560&limit=10&offset=0
+
+### 13. Одобрение: 200, status=approved, новая version
+# @name approve
+POST {{baseUrl}}/api/v1/applications/{{submit.response.body.$.id}}/actions
+Content-Type: application/json
+X-CSRF-Token: {{bankLogin.response.body.$.csrf}}
+
+{"version":{{submit.response.body.$.version}},"action":"approve","comment":"Проверены документы и основания решения"}
+
+### 14. Учебное оформление: 200, contract.success=true, status=approved
+# @name sign
+POST {{baseUrl}}/api/v1/applications/{{submit.response.body.$.id}}/actions
+Content-Type: application/json
+X-CSRF-Token: {{bankLogin.response.body.$.csrf}}
+
+{"version":{{approve.response.body.$.version}},"action":"sign","comment":"Подтверждаю учебное оформление договора"}
+
+### 15. Ошибка выплаты: 200, disbursement.success=false, status=approved.
+# Попытка сохранена, версия увеличена.
+# @name failedPay
+POST {{baseUrl}}/api/v1/applications/{{submit.response.body.$.id}}/actions
+Content-Type: application/json
+X-CSRF-Token: {{bankLogin.response.body.$.csrf}}
+
+{"version":{{sign.response.body.$.version}},"action":"pay","comment":"Проверка ошибки симуляции перечисления","simulate_failure":true}
+
+### 16. Устаревшая версия: 409 APPLICATION_CHANGED, без новой ревизии
+POST {{baseUrl}}/api/v1/applications/{{submit.response.body.$.id}}/actions
+Content-Type: application/json
+X-CSRF-Token: {{bankLogin.response.body.$.csrf}}
+
+{"version":{{sign.response.body.$.version}},"action":"pay","comment":"Попытка со старой версией заявки"}
+
+### 17. Повтор выплаты с новой версией: 200, status=funded
+# @name pay
+POST {{baseUrl}}/api/v1/applications/{{submit.response.body.$.id}}/actions
+Content-Type: application/json
+X-CSRF-Token: {{bankLogin.response.body.$.csrf}}
+
+{"version":{{failedPay.response.body.$.version}},"action":"pay","comment":"Повторная симуляция перечисления средств"}
+
+### 18. Погашение: 200, status=settled
+# @name settle
+POST {{baseUrl}}/api/v1/applications/{{submit.response.body.$.id}}/actions
+Content-Type: application/json
+X-CSRF-Token: {{bankLogin.response.body.$.csrf}}
+
+{"version":{{pay.response.body.$.version}},"action":"settle","comment":"Учебное обязательство полностью погашено"}
+
+### 19. История версий: 200, снимки от 1 до settle.version
+GET {{baseUrl}}/api/v1/applications/{{submit.response.body.$.id}}/revisions
+
+### 20. Персональная лента (у сотрудника общая): 200
+GET {{baseUrl}}/api/v1/feed
+
+### 21. Выход: 200, success=true
+POST {{baseUrl}}/api/v1/logout
+X-CSRF-Token: {{bankLogin.response.body.$.csrf}}
+
+### 22. Отозванная сессия: 401 SESSION_REQUIRED
+GET {{baseUrl}}/api/v1/me

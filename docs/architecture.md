@@ -15,7 +15,9 @@ flowchart LR
     API --> Assistant[AssistantProvider]
     Assistant --> Provider[OpenAI-совместимый API → настроенная модель]
     Assistant --> Rules[Явный резервный помощник по правилам]
+    API --> Contract[ContractGateway → учебное оформление]
     API --> Gateway[PaymentGateway → симулятор выплаты]
+    API --> Documents[DocumentProvider → синтетический пакет]
 ```
 
 `services/platform/catalog.py` содержит продукты и требования к документам; `engine.py` — расчёт и риск-политику; `adapters.py` — контракты `DataSource`, `PaymentGateway`, `AssistantProvider`; `api.py` — авторизацию демопрофилей, транзакции и команды процесса. Новую интеграцию реализуют наследованием контракта и регистрацией в композиции приложения. Произвольный импорт классов из пользовательского ввода не допускается.
@@ -24,27 +26,7 @@ flowchart LR
 
 ## Данные
 
-```mermaid
-erDiagram
-    Account ||--o{ SessionToken : sessions
-    Account ||--o| Draft : draft
-    Account ||--o{ Application : owns
-    Account ||--o{ ChatTurn : conversations
-    Account ||--o{ AssessmentRun : bound_AI_reviews
-    Application ||--o{ ApplicationRevision : snapshots
-    Application {
-        UUID id
-        string account_id
-        string request_key
-        string request_hash
-        string status
-        int version
-        JSON payload
-        JSON assessment
-        JSON events
-        bigint created_at
-    }
-```
+Полная [модель данных и ER-диаграмма](data-model.md) описывает семь таблиц `conveyor_*`, ключи, JSON-снимки и форматы времени. Серверная анкета и команды описаны в [API](api.md); машинный контракт — [OpenAPI](openapi.json), воспроизводимая последовательность — [коллекция запросов](requests.http).
 
 Аккаунт соответствует одной демонстрационной компании или роли сотрудника. Роли берутся с сервера. Демоаккаунты общие для всех проверяющих стенда: это явно обозначено на экране входа. Новая модель не реализует production-регистрацию, членство в нескольких организациях, корпоративный SSO или MFA. Старые регистрация и почтовое восстановление существуют в историческом интерфейсе и не требуются для проверки нового продукта.
 
@@ -56,27 +38,7 @@ erDiagram
 
 ## Состояния
 
-```mermaid
-stateDiagram-v2
-    [*] --> assessment
-    assessment --> approved: чистый сценарий и согласие
-    assessment --> in_review: спорные факторы
-    assessment --> rejected: блокирующие правила
-    assessment --> needs_info: нет обязательных данных
-    assessment --> technical_hold: источник недоступен
-    needs_info --> in_review: исправление и повторные проверки
-    in_review --> approved: решение сотрудника
-    in_review --> rejected: решение сотрудника
-    in_review --> needs_info: запрос уточнений
-    technical_hold --> in_review: повторная проверка
-    in_review --> offer_pending: альтернативные условия
-    offer_pending --> approved: согласие с точной версией оффера
-    offer_pending --> offer_declined: отказ клиента
-    approved --> funded: успешная симуляция выплаты
-    approved --> approved: ошибка симуляции выплаты
-    approved --> settled: симуляция погашения
-    funded --> settled: симуляция погашения
-```
+Полная [диаграмма состояний заявки](application-states.md) содержит переходы, разрешённые роли и ограничения команд. До отправки существуют черновик и расчёт; при создании заявки сразу сохраняется результат `approved`, `in_review`, `rejected`, `needs_info` или `technical_hold`. Повторный расчёт может вернуть любой из этих результатов. Оформление договора хранится внутри `approved`, успешная выплата переводит в `funded`, погашение — в `settled`. Состояния задания заключения описаны отдельно от статусов заявки.
 
 Оффер действует 30 минут. Просроченный оффер нельзя принять; фоновый перевод в отдельный статус истечения не реализован. Повторная проверка `technical_hold` вернёт ожидание, если выбранный мок по-прежнему недоступен. При уточнении можно выбрать восстановившийся тестовый пакет, сохранив новую ревизию.
 
@@ -94,7 +56,7 @@ stateDiagram-v2
 
 Docker: Nginx, API, worker, PostgreSQL. Python-зависимости закреплены в requirements.lock, frontend — package-lock.json. Alembic выполняется до API, `AUTO_CREATE_SCHEMA=false` в Compose. Локальный быстрый запуск поддерживает SQLite с автоматическим созданием таблиц; схемные миграции рассчитаны прежде всего на новый PostgreSQL-стенд. Импорт исторической SQLite-базы в PostgreSQL не автоматизирован.
 
-Логи API содержат request ID, метод, статус и время; ответы API не кешируются. Health проверяет БД. Метрики Prometheus, трассировка и кластерная отказоустойчивость пока не реализованы. В текущем окружении Docker отсутствует; проверены реальный PostgreSQL 17, Alembic, API и браузерный процесс локально. Контейнерная сборка проверяется отдельным CI workflow.
+Логи API содержат request ID, метод, статус и время; ответы API не кешируются. Health проверяет БД. Метрики Prometheus, трассировка и кластерная отказоустойчивость пока не реализованы. Команды проверок и ожидаемые результаты приведены в [тестовых сценариях](testing.md). Контейнерная сборка проверяется отдельным CI workflow; наличие конфигурации не заменяет успешный прогон на целевом стенде.
 
 Резервная копия стенда: `docker compose exec -T postgres pg_dump -U conveyor -d conveyor -Fc > backup.dump`. Восстановление в подготовленную пустую БД: `docker compose exec -T postgres pg_restore -U conveyor -d conveyor < backup.dump`. Перед восстановлением остановить запись API и сохранить текущую копию. Эти команды — инструкция; полноценный DR-drill текущей версией не заявляется.
 
